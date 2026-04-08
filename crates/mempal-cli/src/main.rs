@@ -11,6 +11,7 @@ use mempal_core::{
 };
 use mempal_embed::{Embedder, api::ApiEmbedder, onnx::OnnxEmbedder};
 use mempal_ingest::ingest_dir;
+use mempal_mcp::MempalMcpServer;
 use mempal_search::search;
 
 #[derive(Parser)]
@@ -47,6 +48,10 @@ enum Commands {
     Taxonomy {
         #[command(subcommand)]
         command: TaxonomyCommands,
+    },
+    Serve {
+        #[arg(long)]
+        mcp: bool,
     },
     Status,
 }
@@ -103,6 +108,7 @@ async fn run() -> Result<()> {
         }
         Commands::WakeUp => wake_up_command(&db),
         Commands::Taxonomy { command } => taxonomy_command(&db, command),
+        Commands::Serve { mcp } => serve_command(&config, mcp).await,
         Commands::Status => status_command(&db),
     }
 }
@@ -342,6 +348,13 @@ fn status_command(db: &Database) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn serve_command(config: &Config, _mcp: bool) -> Result<()> {
+    let server = MempalMcpServer::new(expand_home(&config.db_path), config.clone());
+    let service = server.serve_stdio().await?;
+    service.waiting().await?;
     Ok(())
 }
 
