@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+mempal-aaak = { path = "../mempal-aaak" }
 mempal-core = { path = "../mempal-core" }
 mempal-embed = { path = "../mempal-embed" }
 mempal-ingest = { path = "../mempal-ingest" }

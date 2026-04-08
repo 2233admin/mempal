@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use mempal_aaak::{AaakCodec, AaakMeta};
 use mempal_core::{
     config::Config,
     db::Database,
@@ -44,7 +46,13 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    WakeUp,
+    WakeUp {
+        #[arg(long)]
+        format: Option<String>,
+    },
+    Compress {
+        text: String,
+    },
     Taxonomy {
         #[command(subcommand)]
         command: TaxonomyCommands,
@@ -106,7 +114,8 @@ async fn run() -> Result<()> {
             )
             .await
         }
-        Commands::WakeUp => wake_up_command(&db),
+        Commands::WakeUp { format } => wake_up_command(&db, format.as_deref()),
+        Commands::Compress { text } => compress_command(&text),
         Commands::Taxonomy { command } => taxonomy_command(&db, command),
         Commands::Serve { mcp } => serve_command(&config, mcp).await,
         Commands::Status => status_command(&db),
@@ -211,7 +220,14 @@ async fn search_command(
     Ok(())
 }
 
-fn wake_up_command(db: &Database) -> Result<()> {
+fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
+    if let Some("aaak") = format {
+        return wake_up_aaak_command(db);
+    }
+    if let Some(format) = format {
+        bail!("unsupported wake-up format: {format}");
+    }
+
     let drawer_count = query_count(db, "drawers")?;
     let taxonomy_count = query_count(db, "taxonomy")?;
     let recent_drawers = db
@@ -244,6 +260,56 @@ fn wake_up_command(db: &Database) -> Result<()> {
     println!();
     println!("estimated_tokens: {token_estimate}");
 
+    Ok(())
+}
+
+fn wake_up_aaak_command(db: &Database) -> Result<()> {
+    let recent_drawers = db
+        .recent_drawers(5)
+        .context("failed to load recent drawers for AAAK wake-up")?;
+    let text = if recent_drawers.is_empty() {
+        "mempal wake-up: no recent drawers".to_string()
+    } else {
+        recent_drawers
+            .iter()
+            .map(|drawer| drawer.content.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let wing = recent_drawers
+        .first()
+        .map(|drawer| drawer.wing.as_str())
+        .unwrap_or("mempal");
+    let room = recent_drawers
+        .first()
+        .and_then(|drawer| drawer.room.as_deref())
+        .unwrap_or("default");
+    let output = AaakCodec::default().encode(
+        &text,
+        &AaakMeta {
+            wing: wing.to_string(),
+            room: room.to_string(),
+            date: current_meta_date(),
+            source: "wake-up".to_string(),
+        },
+    );
+
+    println!("{}", output.document);
+    Ok(())
+}
+
+fn compress_command(text: &str) -> Result<()> {
+    let output = AaakCodec::default().encode(
+        text,
+        &AaakMeta {
+            wing: "manual".to_string(),
+            room: "compress".to_string(),
+            date: current_meta_date(),
+            source: "cli".to_string(),
+        },
+    );
+
+    println!("{}", output.document);
     Ok(())
 }
 
@@ -424,6 +490,13 @@ fn estimate_tokens(drawers: &[mempal_core::types::Drawer]) -> usize {
         .iter()
         .map(|drawer| drawer.content.split_whitespace().count())
         .sum()
+}
+
+fn current_meta_date() -> String {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs().to_string(),
+        Err(_) => "0".to_string(),
+    }
 }
 
 fn detect_rooms(dir: &Path) -> Result<Vec<String>> {

@@ -208,3 +208,44 @@ fn test_cli_serve_help() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("--mcp"));
 }
+
+#[test]
+fn test_cli_wakeup_aaak_format() {
+    let home = tempdir().expect("home temp dir should be created");
+    let db = seed_db(home.path());
+    insert_drawer(
+        &db,
+        "drawer_a",
+        "myapp",
+        Some("auth"),
+        "Kai recommended Clerk over Auth0 based on pricing and DX.",
+    );
+
+    let output = run_cli(home.path(), &["wake-up", "--format", "aaak"]);
+    assert!(
+        output.status.success(),
+        "wake-up --format aaak failed: {:?}",
+        output
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.starts_with("V1|"));
+    assert!(stdout.contains("DECISION"));
+}
+
+#[test]
+fn test_cli_compress() {
+    let home = tempdir().expect("home temp dir should be created");
+    let output = run_cli(
+        home.path(),
+        &[
+            "compress",
+            "Kai recommended Clerk over Auth0 based on pricing and DX",
+        ],
+    );
+    assert!(output.status.success(), "compress failed: {:?}", output);
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("KAI"));
+    assert!(stdout.contains("DECISION"));
+}
