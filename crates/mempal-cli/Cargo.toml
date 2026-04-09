@@ -14,6 +14,7 @@ rest = ["dep:mempal-api", "mempal-api/rest"]
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 clap.workspace = true
 mempal-aaak = { path = "../mempal-aaak" }
 mempal-api = { path = "../mempal-api", optional = true }
@@ -22,7 +23,9 @@ mempal-embed = { path = "../mempal-embed" }
 mempal-ingest = { path = "../mempal-ingest" }
 mempal-mcp = { path = "../mempal-mcp" }
 mempal-search = { path = "../mempal-search" }
+serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

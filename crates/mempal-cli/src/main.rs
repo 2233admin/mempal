@@ -3,27 +3,27 @@ use std::env;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "rest")]
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use mempal_aaak::{AaakCodec, AaakMeta};
 #[cfg(feature = "rest")]
-use mempal_api::{
-    ApiState,
-    ConfiguredEmbedderFactory as ApiConfiguredEmbedderFactory,
-    DEFAULT_REST_ADDR,
-    serve as serve_rest_api,
-};
+use mempal_api::{ApiState, DEFAULT_REST_ADDR, serve as serve_rest_api};
 use mempal_core::{
     config::Config,
     db::Database,
+    protocol::{DEFAULT_IDENTITY_HINT, MEMORY_PROTOCOL},
     types::TaxonomyEntry,
+    utils::current_timestamp,
 };
-use mempal_embed::{Embedder, api::ApiEmbedder, onnx::OnnxEmbedder};
+use mempal_embed::{ConfiguredEmbedderFactory, Embedder};
 use mempal_ingest::ingest_dir;
 use mempal_mcp::MempalMcpServer;
 use mempal_search::search;
+
+mod longmemeval;
+
+use crate::longmemeval::{BenchMode, LongMemEvalArgs, LongMemEvalGranularity, default_top_k};
 
 #[derive(Parser)]
 #[command(name = "mempal", about = "Project memory for coding agents")]
@@ -62,6 +62,10 @@ enum Commands {
     Compress {
         text: String,
     },
+    Bench {
+        #[command(subcommand)]
+        command: BenchCommands,
+    },
     Taxonomy {
         #[command(subcommand)]
         command: TaxonomyCommands,
@@ -81,6 +85,26 @@ enum TaxonomyCommands {
         room: String,
         #[arg(long)]
         keywords: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum BenchCommands {
+    #[command(name = "longmemeval")]
+    LongMemEval {
+        data_file: PathBuf,
+        #[arg(long, value_enum, default_value_t = BenchMode::Raw)]
+        mode: BenchMode,
+        #[arg(long, value_enum, default_value_t = LongMemEvalGranularity::Session)]
+        granularity: LongMemEvalGranularity,
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        #[arg(long, default_value_t = default_top_k())]
+        top_k: usize,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -125,9 +149,38 @@ async fn run() -> Result<()> {
         }
         Commands::WakeUp { format } => wake_up_command(&db, format.as_deref()),
         Commands::Compress { text } => compress_command(&text),
+        Commands::Bench { command } => bench_command(&config, command).await,
         Commands::Taxonomy { command } => taxonomy_command(&db, command),
         Commands::Serve { mcp } => serve_command(&config, mcp).await,
         Commands::Status => status_command(&db),
+    }
+}
+
+async fn bench_command(config: &Config, command: BenchCommands) -> Result<()> {
+    match command {
+        BenchCommands::LongMemEval {
+            data_file,
+            mode,
+            granularity,
+            limit,
+            skip,
+            top_k,
+            out,
+        } => {
+            longmemeval::run_longmemeval_command(
+                config,
+                LongMemEvalArgs {
+                    data_file,
+                    mode,
+                    granularity,
+                    limit,
+                    skip,
+                    top_k,
+                    out,
+                },
+            )
+            .await
+        }
     }
 }
 
@@ -214,9 +267,7 @@ async fn search_command(
 
     for result in results {
         let room = result.room.unwrap_or_else(|| "default".to_string());
-        let source_file = result
-            .source_file
-            .unwrap_or_else(|| "<unknown>".to_string());
+        let source_file = result.source_file;
         println!(
             "[{:.3}] {}/{} {}",
             result.similarity, result.wing, room, result.drawer_id
@@ -233,23 +284,38 @@ fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
     if let Some("aaak") = format {
         return wake_up_aaak_command(db);
     }
+    if let Some("protocol") = format {
+        println!("{MEMORY_PROTOCOL}");
+        return Ok(());
+    }
     if let Some(format) = format {
         bail!("unsupported wake-up format: {format}");
     }
 
-    let drawer_count = query_count(db, "drawers")?;
-    let taxonomy_count = query_count(db, "taxonomy")?;
+    let drawer_count = db.drawer_count().context("failed to count drawers")?;
+    let taxonomy_count = db.taxonomy_count().context("failed to count taxonomy")?;
     let recent_drawers = db
         .recent_drawers(5)
         .context("failed to load recent drawers for wake-up")?;
     let token_estimate = estimate_tokens(&recent_drawers);
 
-    println!("L0");
-    println!("identity: mempal project memory for coding agents");
+    // L0: identity + global stats
+    println!("## L0 — Identity");
+    let identity = read_identity_file();
+    if identity.is_empty() {
+        println!("{DEFAULT_IDENTITY_HINT}");
+    } else {
+        for line in identity.lines() {
+            println!("{line}");
+        }
+    }
+    println!();
     println!("drawer_count: {drawer_count}");
     println!("taxonomy_entries: {taxonomy_count}");
+
+    // L1: recent context
     println!();
-    println!("L1");
+    println!("## L1 — Recent Context");
     if recent_drawers.is_empty() {
         println!("no recent drawers");
     } else {
@@ -269,7 +335,22 @@ fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
     println!();
     println!("estimated_tokens: {token_estimate}");
 
+    // Memory protocol (for AI agents reading this output)
+    println!();
+    println!("## Memory Protocol");
+    println!("{MEMORY_PROTOCOL}");
+
     Ok(())
+}
+
+fn read_identity_file() -> String {
+    let Some(home) = env::var_os("HOME") else {
+        return String::new();
+    };
+    let identity_path = PathBuf::from(home).join(".mempal").join("identity.txt");
+    std::fs::read_to_string(&identity_path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn wake_up_aaak_command(db: &Database) -> Result<()> {
@@ -298,7 +379,7 @@ fn wake_up_aaak_command(db: &Database) -> Result<()> {
         &AaakMeta {
             wing: wing.to_string(),
             room: room.to_string(),
-            date: current_meta_date(),
+            date: current_timestamp(),
             source: "wake-up".to_string(),
         },
     );
@@ -313,7 +394,7 @@ fn compress_command(text: &str) -> Result<()> {
         &AaakMeta {
             wing: "manual".to_string(),
             room: "compress".to_string(),
-            date: current_meta_date(),
+            date: current_timestamp(),
             source: "cli".to_string(),
         },
     );
@@ -381,8 +462,8 @@ fn taxonomy_edit_command(db: &Database, wing: &str, room: &str, keywords: &str) 
 }
 
 fn status_command(db: &Database) -> Result<()> {
-    let drawer_count = query_count(db, "drawers")?;
-    let taxonomy_count = query_count(db, "taxonomy")?;
+    let drawer_count = db.drawer_count().context("failed to count drawers")?;
+    let taxonomy_count = db.taxonomy_count().context("failed to count taxonomy")?;
     let db_size_bytes = db
         .database_size_bytes()
         .context("failed to compute database size")?;
@@ -391,28 +472,7 @@ fn status_command(db: &Database) -> Result<()> {
     println!("taxonomy_entries: {taxonomy_count}");
     println!("db_size_bytes: {db_size_bytes}");
 
-    let mut statement = db
-        .conn()
-        .prepare(
-            r#"
-            SELECT wing, room, COUNT(*)
-            FROM drawers
-            GROUP BY wing, room
-            ORDER BY wing, room
-            "#,
-        )
-        .context("failed to prepare status query")?;
-    let counts = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })
-        .context("failed to execute status query")?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .context("failed to collect status rows")?;
+    let counts = db.scope_counts().context("failed to query scope counts")?;
 
     println!("scopes:");
     if counts.is_empty() {
@@ -426,8 +486,8 @@ fn status_command(db: &Database) -> Result<()> {
     Ok(())
 }
 
-async fn serve_command(config: &Config, _mcp: bool) -> Result<()> {
-    if _mcp {
+async fn serve_command(config: &Config, mcp: bool) -> Result<()> {
+    if mcp {
         return serve_mcp_command(config).await;
     }
 
@@ -462,7 +522,7 @@ async fn serve_mcp_and_rest_command(config: &Config) -> Result<()> {
 
     let state = ApiState::new(
         db_path.clone(),
-        Arc::new(ApiConfiguredEmbedderFactory::new(config.clone())),
+        Arc::new(ConfiguredEmbedderFactory::new(config.clone())),
     );
     let mut rest_task = tokio::spawn(async move {
         serve_rest_api(listener, state)
@@ -499,23 +559,11 @@ async fn serve_mcp_and_rest_command(config: &Config) -> Result<()> {
 }
 
 async fn build_embedder(config: &Config) -> Result<Box<dyn Embedder>> {
-    match config.embed.backend.as_str() {
-        "onnx" => Ok(Box::new(
-            OnnxEmbedder::new_or_download()
-                .await
-                .context("failed to initialize ONNX embedder")?,
-        )),
-        "api" => Ok(Box::new(ApiEmbedder::new(
-            config
-                .embed
-                .api_endpoint
-                .clone()
-                .unwrap_or_else(|| "http://localhost:11434/api/embeddings".to_string()),
-            config.embed.api_model.clone(),
-            384,
-        ))),
-        backend => bail!("unsupported embed backend: {backend}"),
-    }
+    use mempal_embed::EmbedderFactory;
+    ConfiguredEmbedderFactory::new(config.clone())
+        .build()
+        .await
+        .context("failed to initialize embedder")
 }
 
 fn expand_home(path: &str) -> PathBuf {
@@ -526,12 +574,6 @@ fn expand_home(path: &str) -> PathBuf {
     }
 
     PathBuf::from(path)
-}
-
-fn query_count(db: &Database, table: &str) -> Result<i64> {
-    db.conn()
-        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
-        .with_context(|| format!("failed to count rows in {table}"))
 }
 
 fn parse_keywords_arg(keywords: &str) -> Vec<String> {
@@ -564,13 +606,6 @@ fn estimate_tokens(drawers: &[mempal_core::types::Drawer]) -> usize {
         .iter()
         .map(|drawer| drawer.content.split_whitespace().count())
         .sum()
-}
-
-fn current_meta_date() -> String {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs().to_string(),
-        Err(_) => "0".to_string(),
-    }
 }
 
 fn detect_rooms(dir: &Path) -> Result<Vec<String>> {

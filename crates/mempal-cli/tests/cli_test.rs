@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use mempal_aaak::AaakDocument;
 use mempal_core::{
     db::Database,
     types::{Drawer, SourceType},
@@ -210,6 +211,18 @@ fn test_cli_serve_help() {
 }
 
 #[test]
+fn test_cli_longmemeval_help() {
+    let home = tempdir().expect("home temp dir should be created");
+    let output = run_cli(home.path(), &["bench", "longmemeval", "--help"]);
+    assert!(output.status.success(), "bench longmemeval --help failed: {:?}", output);
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("longmemeval"));
+    assert!(stdout.contains("--mode"));
+    assert!(stdout.contains("--granularity"));
+}
+
+#[test]
 fn test_cli_wakeup_aaak_format() {
     let home = tempdir().expect("home temp dir should be created");
     let db = seed_db(home.path());
@@ -248,4 +261,29 @@ fn test_cli_compress() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("KAI"));
     assert!(stdout.contains("DECISION"));
+}
+
+#[test]
+fn test_cli_compress_outputs_valid_aaak_without_named_entities() {
+    let home = tempdir().expect("home temp dir should be created");
+    let output = run_cli(home.path(), &["compress", "alpha beta gamma delta"]);
+    assert!(output.status.success(), "compress failed: {:?}", output);
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let document = AaakDocument::parse(stdout.trim()).expect("compress should emit valid AAAK");
+    assert_eq!(document.zettels[0].entities, vec!["UNK"]);
+}
+
+#[test]
+fn test_cli_compress_mixed_chinese_and_ascii_keeps_ascii_entities() {
+    let home = tempdir().expect("home temp dir should be created");
+    let output = run_cli(home.path(), &["compress", "张三决定用Clerk替换Auth0，因为价格更优。"]);
+    assert!(output.status.success(), "compress failed: {:?}", output);
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let document = AaakDocument::parse(stdout.trim()).expect("compress should emit valid AAAK");
+    let entities = &document.zettels[0].entities;
+
+    assert!(entities.iter().any(|entity| entity == "CLE"));
+    assert!(entities.iter().any(|entity| entity == "AUT"));
 }

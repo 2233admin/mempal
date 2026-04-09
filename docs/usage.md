@@ -154,7 +154,34 @@ Compress arbitrary text into AAAK format:
 mempal compress "Kai recommended Clerk over Auth0 based on pricing and DX"
 ```
 
-AAAK is an output formatter only. It does not replace raw drawer storage in SQLite.
+Example output:
+
+```
+V1|manual|compress|1744156800|cli
+0:KAI+CLK+AUT|kai_clerk_auth0|"Kai recommended Clerk over Auth0 based on pricing and DX"|★★★★|determ|DECISION
+```
+
+Each field: `id:ENTITIES|topics|"quote"|stars|emotions|FLAGS`. Entities are 3-letter uppercase codes. Stars indicate importance (1-5). Emotions and flags are auto-detected from content.
+
+### Chinese Text
+
+AAAK supports Chinese and mixed Chinese-English text:
+
+```bash
+mempal compress "张三推荐Clerk替换Auth0，因为价格更优"
+```
+
+Chinese entities and topics are extracted with [jieba-rs](https://crates.io/crates/jieba-rs): POS tagging identifies names/places/organizations (`nr*`/`ns`/`nt`/`nz`) for entities, and nouns/verbs/adjectives (`n*`/`v*`/`a*`) become topics. Emotion and flag detection includes Chinese signal words (决定, 架构, 部署, etc.).
+
+### Wake-Up with AAAK
+
+```bash
+mempal wake-up --format aaak
+```
+
+This encodes the most recent drawers in AAAK format for compact agent context refresh.
+
+AAAK is an output formatter only. It does not replace raw drawer storage in SQLite. See [`docs/aaak-dialect.md`](aaak-dialect.md) for the full format specification.
 
 ## Taxonomy
 
@@ -187,6 +214,42 @@ The command reports:
 - DB file size
 - per-`wing` and per-`room` drawer counts
 
+## Benchmark LongMemEval
+
+`mempal` includes a native LongMemEval harness that reuses the dataset shape and retrieval metrics documented in `mempalace`, while indexing and searching through `mempal` itself.
+
+Run the default session-granularity raw benchmark:
+
+```bash
+mempal bench longmemeval /path/to/longmemeval_s_cleaned.json
+```
+
+Switch retrieval modes:
+
+```bash
+mempal bench longmemeval /path/to/longmemeval_s_cleaned.json --mode aaak
+mempal bench longmemeval /path/to/longmemeval_s_cleaned.json --mode rooms
+```
+
+Useful options:
+
+- `--granularity session|turn`
+- `--limit N`
+- `--skip N`
+- `--top-k N`
+- `--out path/to/results.jsonl`
+
+Example:
+
+```bash
+mempal bench longmemeval /tmp/longmemeval-data/longmemeval_s_cleaned.json \
+  --mode rooms \
+  --limit 20 \
+  --out benchmarks/results_longmemeval_rooms_20.jsonl
+```
+
+The command prints session-level and turn-level recall / NDCG summaries, plus per-question-type session metrics. When `--out` is set, it also writes JSONL logs with ranked items and per-question metrics.
+
 ## Serve MCP And REST
 
 ### MCP-only mode
@@ -217,10 +280,10 @@ Behavior with `--features rest`:
 
 The server exposes four tools:
 
-- `mempal_status`
-- `mempal_search`
-- `mempal_ingest`
-- `mempal_taxonomy`
+- `mempal_status` — includes `aaak_spec` in the response, dynamically generated from code constants (emotion codes, flags, live example). The AI learns the AAAK format on first call without any hardcoded spec.
+- `mempal_search` — vector search with routing
+- `mempal_ingest` — store a single drawer
+- `mempal_taxonomy` — list or edit taxonomy
 
 Example request shapes:
 

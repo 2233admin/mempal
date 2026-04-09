@@ -3,4 +3,4 @@
 mod server;
 mod tools;
 
-pub use server::{ConfiguredEmbedderFactory, EmbedderFactory, MempalMcpServer};
+pub use server::MempalMcpServer;

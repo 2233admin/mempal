@@ -1,15 +1,27 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use mempal_core::types::{RouteDecision, SearchResult, TaxonomyEntry};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SearchRequest {
+    /// Natural-language query. Use the user's actual question verbatim
+    /// when possible — the embedding model handles paraphrase and translation.
     pub query: String,
+
+    /// Optional wing filter. OMIT (leave null) unless you already know the
+    /// EXACT wing name from a prior mempal_status call or the user named it
+    /// explicitly. Wing filtering is a strict equality match, so guessing a
+    /// wing name (e.g. "engineering", "backend") will silently return zero
+    /// results. When in doubt, leave this field unset for a global search
+    /// across all wings.
     pub wing: Option<String>,
+
+    /// Optional room filter within a wing. Same rule as wing: OMIT unless you
+    /// have seen the exact room name in a prior mempal_status call. Guessing
+    /// returns zero results.
     pub room: Option<String>,
+
+    /// Maximum number of results to return. Defaults to 10 when omitted.
     pub top_k: Option<usize>,
 }
 
@@ -24,7 +36,7 @@ pub struct SearchResultDto {
     pub content: String,
     pub wing: String,
     pub room: Option<String>,
-    pub source_file: Option<String>,
+    pub source_file: String,
     pub similarity: f32,
     pub route: RouteDecisionDto,
 }
@@ -56,6 +68,8 @@ pub struct StatusResponse {
     pub taxonomy_count: i64,
     pub db_size_bytes: u64,
     pub scopes: Vec<ScopeCount>,
+    pub aaak_spec: String,
+    pub memory_protocol: String,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -121,38 +135,4 @@ impl From<TaxonomyEntry> for TaxonomyEntryDto {
             keywords: value.keywords,
         }
     }
-}
-
-pub fn build_drawer_id(wing: &str, room: Option<&str>, content: &str) -> String {
-    let room = room.unwrap_or("default");
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    let digest = format!("{:x}", hasher.finalize());
-
-    format!(
-        "drawer_{}_{}_{}",
-        sanitize_component(wing),
-        sanitize_component(room),
-        &digest[..8]
-    )
-}
-
-pub fn current_timestamp() -> String {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs().to_string(),
-        Err(_) => "0".to_string(),
-    }
-}
-
-fn sanitize_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }

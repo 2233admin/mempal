@@ -5,8 +5,8 @@ use mempal_core::{
     db::Database,
     types::{Drawer, SourceType},
 };
-use mempal_embed::Embedder;
-use mempal_mcp::{EmbedderFactory, MempalMcpServer};
+use mempal_embed::{Embedder, EmbedderFactory};
+use mempal_mcp::MempalMcpServer;
 use rmcp::{
     ServiceExt,
     model::CallToolRequestParams,
@@ -19,7 +19,10 @@ struct TestEmbedder;
 
 #[async_trait::async_trait]
 impl Embedder for TestEmbedder {
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+    async fn embed(
+        &self,
+        texts: &[&str],
+    ) -> std::result::Result<Vec<Vec<f32>>, mempal_embed::EmbedError> {
         Ok(texts.iter().map(|text| fake_embedding(text)).collect())
     }
 
@@ -37,7 +40,9 @@ struct TestEmbedderFactory;
 
 #[async_trait::async_trait]
 impl EmbedderFactory for TestEmbedderFactory {
-    async fn build(&self) -> anyhow::Result<Box<dyn Embedder>> {
+    async fn build(
+        &self,
+    ) -> std::result::Result<Box<dyn Embedder>, mempal_embed::EmbedError> {
         Ok(Box::new(TestEmbedder))
     }
 }
@@ -103,6 +108,73 @@ async fn test_mcp_server_start() -> anyhow::Result<()> {
     assert!(names.contains(&"mempal_search"));
     assert!(names.contains(&"mempal_ingest"));
     assert!(names.contains(&"mempal_taxonomy"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+/// Guards the wing/room field docs on SearchRequest that teach clients not
+/// to guess wing names (which silently return zero results). If someone
+/// strips the `///` comments off `SearchRequest.wing` the JSON schema loses
+/// the OMIT guidance and this test fails.
+#[tokio::test]
+async fn test_mempal_search_schema_warns_about_wing_guessing() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let client = spawn_server(dir.path().join("palace.db")).await?;
+
+    let tools = client.list_all_tools().await?;
+    let search_tool = tools
+        .iter()
+        .find(|tool| tool.name.as_ref() == "mempal_search")
+        .expect("mempal_search tool should be exposed");
+    let schema_json = serde_json::to_string(search_tool.input_schema.as_ref())?;
+    assert!(
+        schema_json.contains("OMIT"),
+        "mempal_search wing/room schema should warn 'OMIT' for global search; got: {schema_json}"
+    );
+    assert!(
+        schema_json.contains("global search"),
+        "mempal_search schema should mention 'global search' fallback; got: {schema_json}"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+/// Guards the primary path by which AI clients discover the memory protocol:
+/// the MCP `initialize` response's `instructions` field. If someone removes
+/// `.with_instructions(MEMORY_PROTOCOL)` from server.rs `get_info`, this test
+/// fails loudly. Without it, all other tests would stay green.
+#[tokio::test]
+async fn test_mcp_initialize_exposes_memory_protocol() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let client = spawn_server(dir.path().join("palace.db")).await?;
+
+    let server_info = client
+        .peer_info()
+        .expect("client should have received server info after initialize");
+    let instructions = server_info
+        .instructions
+        .as_deref()
+        .expect("server info should include instructions");
+
+    assert!(
+        instructions.contains("MEMPAL MEMORY PROTOCOL"),
+        "instructions should contain the memory protocol header, got: {instructions}"
+    );
+    assert!(
+        instructions.contains("VERIFY BEFORE ASSERTING"),
+        "instructions should include the verify rule"
+    );
+    assert!(
+        instructions.contains("FIRST-TIME SETUP"),
+        "instructions should include the FIRST-TIME SETUP rule teaching clients to call mempal_status"
+    );
+    assert!(
+        instructions.len() > 1000,
+        "instructions should be the full protocol (>1000 chars), got {} chars",
+        instructions.len()
+    );
 
     client.cancel().await?;
     Ok(())
@@ -191,6 +263,48 @@ async fn test_mcp_ingest() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn test_mcp_ingest_defaults_source() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("palace.db");
+    let client = spawn_server(db_path.clone()).await?;
+
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("mempal_ingest").with_arguments(
+                serde_json::json!({
+                    "content": "decided to use Clerk",
+                    "wing": "myapp",
+                    "room": "auth"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let payload = result.structured_content.expect("structured result should exist");
+    let drawer_id = payload
+        .get("drawer_id")
+        .and_then(Value::as_str)
+        .expect("drawer_id should be returned");
+
+    let db = open_db(&db_path);
+    let source_file: Option<String> = db.conn().query_row(
+        "SELECT source_file FROM drawers WHERE id = ?1",
+        [drawer_id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        source_file.as_deref(),
+        Some(format!("mempal://drawer/{drawer_id}").as_str())
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_mcp_status_and_taxonomy() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("palace.db");
@@ -209,6 +323,24 @@ async fn test_mcp_status_and_taxonomy() -> anyhow::Result<()> {
     assert_eq!(
         status_payload.get("drawer_count").and_then(Value::as_i64),
         Some(1)
+    );
+    // Fallback path: if a client ignores initialize.instructions, AIs can still
+    // retrieve the protocol via mempal_status. Guard both payload fields.
+    let memory_protocol = status_payload
+        .get("memory_protocol")
+        .and_then(Value::as_str)
+        .expect("status should expose memory_protocol");
+    assert!(
+        memory_protocol.contains("MEMPAL MEMORY PROTOCOL"),
+        "status.memory_protocol should contain the protocol header"
+    );
+    let aaak_spec = status_payload
+        .get("aaak_spec")
+        .and_then(Value::as_str)
+        .expect("status should expose aaak_spec");
+    assert!(
+        aaak_spec.contains("AAAK"),
+        "status.aaak_spec should contain the format name"
     );
 
     let taxonomy = client
