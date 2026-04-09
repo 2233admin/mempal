@@ -11,7 +11,10 @@ struct TestEmbedder;
 
 #[async_trait::async_trait]
 impl Embedder for TestEmbedder {
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+    async fn embed(
+        &self,
+        texts: &[&str],
+    ) -> std::result::Result<Vec<Vec<f32>>, mempal_embed::EmbedError> {
         Ok(texts.iter().map(|text| fake_embedding(text)).collect())
     }
 
@@ -34,6 +37,16 @@ fn fake_embedding(text: &str) -> Vec<f32> {
 
 fn write_file(path: &Path, content: &str) {
     fs::write(path, content).expect("test fixture should be written");
+}
+
+fn insert_taxonomy(db: &Database, wing: &str, room: &str, keywords: &[&str]) {
+    let keywords = serde_json::to_string(keywords).expect("keywords should serialize");
+    db.conn()
+        .execute(
+            "INSERT INTO taxonomy (wing, room, display_name, keywords) VALUES (?1, ?2, ?3, ?4)",
+            (wing, room, room, keywords.as_str()),
+        )
+        .expect("taxonomy should insert");
 }
 
 #[tokio::test]
@@ -154,4 +167,50 @@ async fn test_ingest_directory() {
         .query_row("SELECT COUNT(*) FROM drawers", [], |row| row.get(0))
         .expect("drawer count query should succeed");
     assert!(count >= 4);
+}
+
+#[tokio::test]
+async fn test_ingest_routes_room_from_taxonomy() {
+    let dir = tempdir().expect("temp dir should be created");
+    let db_path = dir.path().join("test.db");
+    let db = Database::open(&db_path).expect("database should open");
+    let embedder = TestEmbedder;
+
+    insert_taxonomy(&db, "myproject", "auth", &["auth", "clerk", "login"]);
+
+    let file = dir.path().join("decision.md");
+    write_file(&file, "We switched login to Clerk because auth setup was simpler.");
+
+    ingest_file(&db, &embedder, &file, "myproject", None)
+        .await
+        .expect("file ingest should succeed");
+
+    let room: Option<String> = db
+        .conn()
+        .query_row("SELECT room FROM drawers LIMIT 1", [], |row| row.get(0))
+        .expect("room query should succeed");
+    assert_eq!(room.as_deref(), Some("auth"));
+}
+
+#[tokio::test]
+async fn test_ingest_routes_to_default_room_when_no_taxonomy_match() {
+    let dir = tempdir().expect("temp dir should be created");
+    let db_path = dir.path().join("test.db");
+    let db = Database::open(&db_path).expect("database should open");
+    let embedder = TestEmbedder;
+
+    insert_taxonomy(&db, "myproject", "auth", &["auth", "clerk", "login"]);
+
+    let file = dir.path().join("notes.md");
+    write_file(&file, "Deployment work moved to Fly.io last week.");
+
+    ingest_file(&db, &embedder, &file, "myproject", None)
+        .await
+        .expect("file ingest should succeed");
+
+    let room: Option<String> = db
+        .conn()
+        .query_row("SELECT room FROM drawers LIMIT 1", [], |row| row.get(0))
+        .expect("room query should succeed");
+    assert_eq!(room.as_deref(), Some("default"));
 }

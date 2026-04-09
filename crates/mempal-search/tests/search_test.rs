@@ -11,7 +11,10 @@ struct TestEmbedder;
 
 #[async_trait::async_trait]
 impl Embedder for TestEmbedder {
-    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+    async fn embed(
+        &self,
+        texts: &[&str],
+    ) -> std::result::Result<Vec<Vec<f32>>, mempal_embed::EmbedError> {
         Ok(texts.iter().map(|text| fake_embedding(text)).collect())
     }
 
@@ -38,14 +41,14 @@ fn insert_drawer(
     content: &str,
     wing: &str,
     room: Option<&str>,
-    source_file: &str,
+    source_file: Option<&str>,
 ) {
     db.insert_drawer(&Drawer {
         id: id.to_string(),
         content: content.to_string(),
         wing: wing.to_string(),
         room: room.map(ToOwned::to_owned),
-        source_file: Some(source_file.to_string()),
+        source_file: source_file.map(ToOwned::to_owned),
         source_type: SourceType::Project,
         added_at: "2026-04-08".to_string(),
         chunk_index: Some(0),
@@ -84,7 +87,7 @@ async fn test_search_basic() {
         "We made the auth decision to use Clerk for this project.",
         "wing_a",
         Some("auth"),
-        "/tmp/a.rs",
+        Some("/tmp/a.rs"),
     );
     insert_drawer(
         &db,
@@ -92,7 +95,7 @@ async fn test_search_basic() {
         "Deployment decision notes for Render.",
         "wing_a",
         Some("deploy"),
-        "/tmp/b.rs",
+        Some("/tmp/b.rs"),
     );
 
     let results = search(&db, &embedder, "auth decision", None, None, 5)
@@ -102,7 +105,7 @@ async fn test_search_basic() {
     assert!(!results.is_empty());
     assert!(results.len() <= 5);
     assert!(!results[0].drawer_id.is_empty());
-    assert!(results.iter().all(|result| result.source_file.is_some()));
+    assert!(results.iter().all(|result| !result.source_file.is_empty()));
     assert!(
         results
             .windows(2)
@@ -122,7 +125,7 @@ async fn test_search_wing_filter() {
         "auth decision for wing a",
         "wing_a",
         None,
-        "/tmp/a.rs",
+        Some("/tmp/a.rs"),
     );
     insert_drawer(
         &db,
@@ -130,7 +133,7 @@ async fn test_search_wing_filter() {
         "auth decision for wing b",
         "wing_b",
         None,
-        "/tmp/b.rs",
+        Some("/tmp/b.rs"),
     );
 
     let results = search(&db, &embedder, "auth decision", Some("wing_a"), None, 10)
@@ -153,7 +156,7 @@ async fn test_search_wing_room_filter() {
         "auth integration decision",
         "wing_a",
         Some("room_auth"),
-        "/tmp/auth.rs",
+        Some("/tmp/auth.rs"),
     );
     insert_drawer(
         &db,
@@ -161,7 +164,7 @@ async fn test_search_wing_room_filter() {
         "deploy checklist",
         "wing_a",
         Some("room_deploy"),
-        "/tmp/deploy.rs",
+        Some("/tmp/deploy.rs"),
     );
 
     let results = search(
@@ -195,16 +198,38 @@ async fn test_search_citation() {
         "database decision",
         "wing_a",
         None,
-        "/path/to/file.py",
+        Some("/path/to/file.py"),
     );
 
     let results = search(&db, &embedder, "database decision", None, None, 10)
         .await
         .expect("search should succeed");
 
-    assert_eq!(results[0].source_file.as_deref(), Some("/path/to/file.py"));
+    assert_eq!(results[0].source_file, "/path/to/file.py");
     assert!(!results[0].drawer_id.is_empty());
     assert!(results[0].route.reason.contains("global"));
+}
+
+#[tokio::test]
+async fn test_search_synthesizes_source_for_missing_citation() {
+    let dir = tempdir().expect("temp dir should be created");
+    let db = Database::open(&dir.path().join("test.db")).expect("database should open");
+    let embedder = TestEmbedder;
+
+    insert_drawer(
+        &db,
+        "legacy_drawer",
+        "legacy imported drawer without source metadata",
+        "wing_a",
+        None,
+        None,
+    );
+
+    let results = search(&db, &embedder, "legacy source metadata", None, None, 10)
+        .await
+        .expect("search should succeed");
+
+    assert_eq!(results[0].source_file, "mempal://drawer/legacy_drawer");
 }
 
 #[tokio::test]
@@ -233,7 +258,7 @@ async fn test_search_routes_from_taxonomy() {
         "We switched to Clerk because login customization was easier.",
         "myapp",
         Some("auth"),
-        "/tmp/auth.md",
+        Some("/tmp/auth.md"),
     );
     insert_drawer(
         &db,
@@ -241,7 +266,7 @@ async fn test_search_routes_from_taxonomy() {
         "Deployment notes for fly.io.",
         "myapp",
         Some("deploy"),
-        "/tmp/deploy.md",
+        Some("/tmp/deploy.md"),
     );
 
     let results = search(&db, &embedder, "why did we switch to clerk", None, None, 10)

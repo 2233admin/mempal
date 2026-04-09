@@ -5,10 +5,11 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 mempal-core = { path = "../mempal-core" }
 mempal-embed = { path = "../mempal-embed" }
+rusqlite.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

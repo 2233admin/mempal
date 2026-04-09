@@ -24,7 +24,7 @@ fn test_search_result_has_citation() {
         content: "test".into(),
         wing: "w".into(),
         room: None,
-        source_file: Some("/a.rs".into()),
+        source_file: "/a.rs".into(),
         similarity: 0.95,
         route: RouteDecision {
             wing: Some("w".into()),
@@ -34,6 +34,6 @@ fn test_search_result_has_citation() {
         },
     };
 
-    assert!(result.source_file.is_some());
+    assert!(!result.source_file.is_empty());
     assert!(!result.drawer_id.is_empty());
 }

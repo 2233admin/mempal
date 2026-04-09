@@ -4,6 +4,12 @@ pub fn chunk_text(text: &str, window: usize, overlap: usize) -> Vec<String> {
         return Vec::new();
     }
 
+    debug_assert!(
+        overlap < window,
+        "chunk overlap ({overlap}) must be less than window ({window})"
+    );
+    let overlap = overlap.min(window.saturating_sub(1));
+
     let chars = trimmed.chars().collect::<Vec<_>>();
     let mut chunks = Vec::new();
     let mut start = 0usize;

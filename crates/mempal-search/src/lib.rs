@@ -1,16 +1,43 @@
 #![warn(clippy::all)]
 
-use anyhow::{Context, Result};
 use mempal_core::{
     db::Database,
     types::{RouteDecision, SearchResult},
+    utils::source_file_or_synthetic,
 };
-use mempal_embed::Embedder;
+use mempal_embed::{EmbedError, Embedder};
+use thiserror::Error;
 
 use crate::filter::build_filter_clause;
 
 pub mod filter;
 pub mod route;
+
+pub type Result<T> = std::result::Result<T, SearchError>;
+
+#[derive(Debug, Error)]
+pub enum SearchError {
+    #[error("failed to embed search query")]
+    EmbedQuery(#[source] EmbedError),
+    #[error("embedder returned no query vector")]
+    MissingQueryVector,
+    #[error("failed to count candidate drawers")]
+    CountCandidateDrawers(#[source] rusqlite::Error),
+    #[error("failed to count total drawers")]
+    CountTotalDrawers(#[source] rusqlite::Error),
+    #[error("failed to serialize query vector")]
+    SerializeQueryVector(#[source] serde_json::Error),
+    #[error("top_k does not fit into i64")]
+    InvalidTopK,
+    #[error("failed to prepare search statement")]
+    PrepareSearch(#[source] rusqlite::Error),
+    #[error("failed to execute search query")]
+    ExecuteSearch(#[source] rusqlite::Error),
+    #[error("failed to collect search rows")]
+    CollectSearchRows(#[source] rusqlite::Error),
+    #[error("failed to load taxonomy entries")]
+    LoadTaxonomy(#[source] mempal_core::db::DbError),
+}
 
 pub async fn search<E: Embedder + ?Sized>(
     db: &Database,
@@ -25,6 +52,29 @@ pub async fn search<E: Embedder + ?Sized>(
     }
 
     let route = resolve_route(db, query, wing, room)?;
+
+    let embeddings = embedder
+        .embed(&[query])
+        .await
+        .map_err(SearchError::EmbedQuery)?;
+    let query_vector = embeddings
+        .into_iter()
+        .next()
+        .ok_or(SearchError::MissingQueryVector)?;
+
+    search_by_vector(db, &query_vector, route, top_k)
+}
+
+pub fn search_by_vector(
+    db: &Database,
+    query_vector: &[f32],
+    route: RouteDecision,
+    top_k: usize,
+) -> Result<Vec<SearchResult>> {
+    if top_k == 0 {
+        return Ok(Vec::new());
+    }
+
     let applied_wing = route.wing.as_deref();
     let applied_room = route.room.as_deref();
 
@@ -35,26 +85,18 @@ pub async fn search<E: Embedder + ?Sized>(
     let candidate_count: i64 = db
         .conn()
         .query_row(&count_sql, (applied_wing, applied_room), |row| row.get(0))
-        .context("failed to count candidate drawers")?;
+        .map_err(SearchError::CountCandidateDrawers)?;
     if candidate_count == 0 {
         return Ok(Vec::new());
     }
     let total_count: i64 = db
         .conn()
         .query_row("SELECT COUNT(*) FROM drawers", [], |row| row.get(0))
-        .context("failed to count total drawers")?;
+        .map_err(SearchError::CountTotalDrawers)?;
 
-    let embeddings = embedder
-        .embed(&[query])
-        .await
-        .context("failed to embed search query")?;
-    let query_vector = embeddings
-        .into_iter()
-        .next()
-        .context("embedder returned no query vector")?;
     let query_json =
-        serde_json::to_string(&query_vector).context("failed to serialize query vector")?;
-    let top_k = i64::try_from(top_k).context("top_k does not fit into i64")?;
+        serde_json::to_string(query_vector).map_err(SearchError::SerializeQueryVector)?;
+    let top_k = i64::try_from(top_k).map_err(|_| SearchError::InvalidTopK)?;
 
     let search_sql = format!(
         r#"
@@ -77,7 +119,7 @@ pub async fn search<E: Embedder + ?Sized>(
     let mut statement = db
         .conn()
         .prepare(&search_sql)
-        .context("failed to prepare search statement")?;
+        .map_err(SearchError::PrepareSearch)?;
     let results = statement
         .query_map(
             (
@@ -89,25 +131,27 @@ pub async fn search<E: Embedder + ?Sized>(
             ),
             |row| {
                 let distance: f64 = row.get(5)?;
+                let drawer_id: String = row.get(0)?;
+                let source_file = row.get::<_, Option<String>>(4)?;
                 Ok(SearchResult {
-                    drawer_id: row.get(0)?,
+                    drawer_id: drawer_id.clone(),
                     content: row.get(1)?,
                     wing: row.get(2)?,
                     room: row.get(3)?,
-                    source_file: row.get(4)?,
+                    source_file: source_file_or_synthetic(&drawer_id, source_file.as_deref()),
                     similarity: (1.0_f64 - distance) as f32,
                     route: route.clone(),
                 })
             },
         )
-        .context("failed to execute search query")?
+        .map_err(SearchError::ExecuteSearch)?
         .collect::<std::result::Result<Vec<_>, _>>()
-        .context("failed to collect search rows")?;
+        .map_err(SearchError::CollectSearchRows)?;
 
     Ok(results)
 }
 
-fn resolve_route(
+pub fn resolve_route(
     db: &Database,
     query: &str,
     wing: Option<&str>,
@@ -130,7 +174,7 @@ fn resolve_route(
 
     let taxonomy = db
         .taxonomy_entries()
-        .context("failed to load taxonomy entries")?;
+        .map_err(SearchError::LoadTaxonomy)?;
     let route = route::route_query(query, &taxonomy);
     if route.confidence >= 0.5 {
         return Ok(route);

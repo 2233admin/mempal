@@ -5,10 +5,16 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 async-trait.workspace = true
 mempal-core = { path = "../mempal-core" }
 ort.workspace = true
 reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 tokenizers.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+serde_json.workspace = true

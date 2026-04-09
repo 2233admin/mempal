@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use axum::{Json, Router, routing::post};
 use mempal_embed::{Embedder, api::ApiEmbedder, onnx::OnnxEmbedder};
+use serde_json::Value;
 use tokio::sync::OnceCell;
 
 async fn shared_onnx_embedder() -> Arc<OnnxEmbedder> {
@@ -75,5 +77,83 @@ async fn test_api_embedder_config() {
 
     assert_eq!(embedder.dimensions(), 384);
     assert_eq!(embedder.name(), "api");
-    assert!(embedder.embed(&["hello"]).await.is_err());
+    assert_eq!(embedder.endpoint(), "http://localhost:11434/api/embeddings");
+    assert_eq!(embedder.model(), Some("nomic-embed-text"));
+}
+
+#[tokio::test]
+async fn test_api_embedder_openai_compatible() {
+    async fn handler(Json(payload): Json<Value>) -> Json<Value> {
+        assert_eq!(payload.get("model").and_then(Value::as_str), Some("test-model"));
+        assert_eq!(
+            payload.get("input").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
+        Json(serde_json::json!({
+            "data": [
+                {"embedding": vec![0.1_f32; 4]},
+                {"embedding": vec![0.2_f32; 4]}
+            ]
+        }))
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("listener should expose address");
+    tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/v1/embeddings", post(handler)))
+            .await
+            .expect("mock server should run");
+    });
+
+    let embedder = ApiEmbedder::new(
+        format!("http://{addr}/v1/embeddings"),
+        Some("test-model".into()),
+        4,
+    );
+
+    let vectors = embedder
+        .embed(&["hello", "world"])
+        .await
+        .expect("OpenAI-compatible response should parse");
+
+    assert_eq!(vectors, vec![vec![0.1_f32; 4], vec![0.2_f32; 4]]);
+}
+
+#[tokio::test]
+async fn test_api_embedder_ollama_compatible() {
+    async fn handler(Json(payload): Json<Value>) -> Json<Value> {
+        assert_eq!(
+            payload.get("model").and_then(Value::as_str),
+            Some("nomic-embed-text")
+        );
+        assert_eq!(payload.get("prompt").and_then(Value::as_str), Some("hello"));
+        Json(serde_json::json!({
+            "embedding": vec![0.3_f32; 3]
+        }))
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("listener should expose address");
+    tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/api/embeddings", post(handler)))
+            .await
+            .expect("mock server should run");
+    });
+
+    let embedder = ApiEmbedder::new(
+        format!("http://{addr}/api/embeddings"),
+        Some("nomic-embed-text".into()),
+        3,
+    );
+
+    let vectors = embedder
+        .embed(&["hello"])
+        .await
+        .expect("Ollama-compatible response should parse");
+
+    assert_eq!(vectors, vec![vec![0.3_f32; 3]]);
 }

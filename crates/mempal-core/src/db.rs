@@ -235,6 +235,59 @@ impl Database {
         Ok(drawers)
     }
 
+    pub fn drawer_exists(&self, drawer_id: &str) -> Result<bool, DbError> {
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM drawers WHERE id = ?1)",
+                [drawer_id],
+                |row| row.get::<_, i64>(0),
+            )?;
+        Ok(exists == 1)
+    }
+
+    pub fn insert_vector(&self, drawer_id: &str, vector: &[f32]) -> Result<(), DbError> {
+        let vector_json = serde_json::to_string(vector)?;
+        self.conn.execute(
+            "INSERT INTO drawer_vectors (id, embedding) VALUES (?1, vec_f32(?2))",
+            (drawer_id, vector_json.as_str()),
+        )?;
+        Ok(())
+    }
+
+    pub fn drawer_count(&self) -> Result<i64, DbError> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers", [], |row| row.get(0))?)
+    }
+
+    pub fn taxonomy_count(&self) -> Result<i64, DbError> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM taxonomy", [], |row| row.get(0))?)
+    }
+
+    pub fn scope_counts(&self) -> Result<Vec<(String, Option<String>, i64)>, DbError> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT wing, room, COUNT(*)
+            FROM drawers
+            GROUP BY wing, room
+            ORDER BY wing, room
+            "#,
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn database_size_bytes(&self) -> Result<u64, DbError> {
         fs::metadata(&self.path)
             .map(|metadata| metadata.len())

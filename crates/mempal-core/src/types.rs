@@ -53,7 +53,7 @@ pub struct SearchResult {
     pub content: String,
     pub wing: String,
     pub room: Option<String>,
-    pub source_file: Option<String>,
+    pub source_file: String,
     pub similarity: f32,
     pub route: RouteDecision,
 }

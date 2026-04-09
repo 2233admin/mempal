@@ -2,11 +2,10 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result, anyhow, bail};
 use ort::{session::Session, session::SessionOutputs, value::Tensor};
 use tokenizers::{PaddingParams, Tokenizer, TruncationParams};
 
-use crate::{EMBEDDING_DIMENSIONS, Embedder};
+use crate::{EMBEDDING_DIMENSIONS, EmbedError, Embedder, Result};
 
 const MODEL_URL: &str =
     "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
@@ -33,7 +32,10 @@ impl OnnxEmbedder {
         let models_dir = path.as_ref().to_path_buf();
         tokio::fs::create_dir_all(&models_dir)
             .await
-            .with_context(|| format!("failed to create model dir {}", models_dir.display()))?;
+            .map_err(|source| EmbedError::CreateModelDir {
+                path: models_dir.clone(),
+                source,
+            })?;
 
         let model_path = models_dir.join(MODEL_FILE_NAME);
         let tokenizer_path = models_dir.join(TOKENIZER_FILE_NAME);
@@ -42,9 +44,12 @@ impl OnnxEmbedder {
         download_if_missing(&tokenizer_path, TOKENIZER_URL).await?;
 
         let session = Session::builder()
-            .context("failed to create ONNX session builder")?
+            .map_err(|error| EmbedError::SessionBuilder(error.to_string()))?
             .commit_from_file(&model_path)
-            .with_context(|| format!("failed to load ONNX model from {}", model_path.display()))?;
+            .map_err(|error| EmbedError::LoadModel {
+                path: model_path.clone(),
+                message: error.to_string(),
+            })?;
         let tokenizer = load_tokenizer(&tokenizer_path)?;
 
         Ok(Self {
@@ -71,17 +76,21 @@ impl Embedder for OnnxEmbedder {
         tokio::task::spawn_blocking(move || {
             let tokenizer = tokenizer
                 .lock()
-                .map_err(|_| anyhow!("tokenizer mutex poisoned"))?;
+                .map_err(|_| EmbedError::Runtime("tokenizer mutex poisoned".to_string()))?;
             let encoded = tokenizer
                 .encode_batch(owned_texts, true)
-                .map_err(|error| anyhow!(error.to_string()))?;
+                .map_err(|error| EmbedError::Tokenizer(error.to_string()))?;
             drop(tokenizer);
 
             let batch_size = encoded.len();
             let sequence_length = encoded
                 .first()
                 .map(|encoding| encoding.len())
-                .context("tokenizer returned no encodings for non-empty input")?;
+                .ok_or_else(|| {
+                    EmbedError::Runtime(
+                        "tokenizer returned no encodings for non-empty input".to_string(),
+                    )
+                })?;
 
             let input_ids = encoded
                 .iter()
@@ -108,7 +117,7 @@ impl Embedder for OnnxEmbedder {
 
             let mut session = session
                 .lock()
-                .map_err(|_| anyhow!("onnx session mutex poisoned"))?;
+                .map_err(|_| EmbedError::Runtime("onnx session mutex poisoned".to_string()))?;
             let expects_token_type_ids = session
                 .inputs()
                 .iter()
@@ -120,7 +129,8 @@ impl Embedder for OnnxEmbedder {
                     Tensor::<i64>::from_array((
                         [batch_size, sequence_length],
                         input_ids.into_boxed_slice(),
-                    ))?
+                    ))
+                    .map_err(|error| EmbedError::Runtime(error.to_string()))?
                     .into(),
                 ),
                 (
@@ -128,7 +138,8 @@ impl Embedder for OnnxEmbedder {
                     Tensor::<i64>::from_array((
                         [batch_size, sequence_length],
                         attention_mask.clone().into_boxed_slice(),
-                    ))?
+                    ))
+                    .map_err(|error| EmbedError::Runtime(error.to_string()))?
                     .into(),
                 ),
             ];
@@ -139,19 +150,22 @@ impl Embedder for OnnxEmbedder {
                     Tensor::<i64>::from_array((
                         [batch_size, sequence_length],
                         token_type_ids.into_boxed_slice(),
-                    ))?
+                    ))
+                    .map_err(|error| EmbedError::Runtime(error.to_string()))?
                     .into(),
                 ));
             }
 
             let outputs = session
                 .run(inputs)
-                .context("failed to run ONNX embedding session")?;
+                .map_err(|error| {
+                    EmbedError::Runtime(format!("failed to run ONNX embedding session: {error}"))
+                })?;
 
             extract_embeddings(outputs, &attention_mask, sequence_length)
         })
         .await
-        .context("onnx embedding worker panicked")?
+        .map_err(EmbedError::WorkerPanic)?
     }
 
     fn dimensions(&self) -> usize {
@@ -166,30 +180,56 @@ impl Embedder for OnnxEmbedder {
 async fn download_if_missing(path: &Path, url: &str) -> Result<()> {
     if tokio::fs::try_exists(path)
         .await
-        .with_context(|| format!("failed to check whether {} exists", path.display()))?
+        .map_err(|source| EmbedError::CheckPathExists {
+            path: path.to_path_buf(),
+            source,
+        })?
     {
         return Ok(());
     }
 
     let response = reqwest::get(url)
         .await
-        .with_context(|| format!("failed to download {url}"))?
+        .map_err(|source| EmbedError::Download {
+            url: url.to_string(),
+            source,
+        })?
         .error_for_status()
-        .with_context(|| format!("download returned error status for {url}"))?;
+        .map_err(|source| EmbedError::DownloadStatus {
+            url: url.to_string(),
+            source,
+        })?;
     let bytes = response
         .bytes()
         .await
-        .with_context(|| format!("failed to read download body from {url}"))?;
+        .map_err(|source| EmbedError::ReadDownloadBody {
+            url: url.to_string(),
+            source,
+        })?;
 
-    tokio::fs::write(path, &bytes)
+    // Write to a temp file then rename to avoid partial-file races when
+    // multiple processes download concurrently.
+    let tmp_path = path.with_extension("tmp");
+    tokio::fs::write(&tmp_path, &bytes)
         .await
-        .with_context(|| format!("failed to write {}", path.display()))?;
+        .map_err(|source| EmbedError::WriteFile {
+            path: tmp_path.clone(),
+            source,
+        })?;
+    tokio::fs::rename(&tmp_path, path)
+        .await
+        .map_err(|source| EmbedError::RenameFile {
+            from: tmp_path,
+            to: path.to_path_buf(),
+            source,
+        })?;
 
     Ok(())
 }
 
 fn load_tokenizer(path: &Path) -> Result<Tokenizer> {
-    let mut tokenizer = Tokenizer::from_file(path).map_err(|error| anyhow!(error.to_string()))?;
+    let mut tokenizer =
+        Tokenizer::from_file(path).map_err(|error| EmbedError::Tokenizer(error.to_string()))?;
     let pad_id = tokenizer.token_to_id(PAD_TOKEN).unwrap_or(PAD_TOKEN_ID);
 
     tokenizer.with_padding(Some(PaddingParams {
@@ -202,7 +242,7 @@ fn load_tokenizer(path: &Path) -> Result<Tokenizer> {
             max_length: MAX_SEQUENCE_LENGTH,
             ..TruncationParams::default()
         }))
-        .map_err(|error| anyhow!(error.to_string()))?;
+        .map_err(|error| EmbedError::Tokenizer(error.to_string()))?;
 
     Ok(tokenizer)
 }
@@ -221,14 +261,19 @@ fn extract_embeddings(
     }
 
     let output = &outputs[0];
-    let array = output.try_extract_array::<f32>()?;
+    let array = output
+        .try_extract_array::<f32>()
+        .map_err(|error| EmbedError::Runtime(error.to_string()))?;
     let shape = array.shape().to_vec();
     let data = array.iter().copied().collect::<Vec<_>>();
 
     match shape.as_slice() {
         [batch_size, dim] => {
             if *dim != EMBEDDING_DIMENSIONS {
-                bail!("unexpected embedding dimension: {dim}");
+                return Err(EmbedError::InvalidDimensions {
+                    expected: EMBEDDING_DIMENSIONS,
+                    actual: *dim,
+                });
             }
 
             Ok(data
@@ -239,12 +284,15 @@ fn extract_embeddings(
         }
         [batch_size, tokens, dim] => {
             if *dim != EMBEDDING_DIMENSIONS {
-                bail!("unexpected token embedding dimension: {dim}");
+                return Err(EmbedError::InvalidDimensions {
+                    expected: EMBEDDING_DIMENSIONS,
+                    actual: *dim,
+                });
             }
             if *tokens != sequence_length {
-                bail!(
+                return Err(EmbedError::InvalidResponse(format!(
                     "token embedding length mismatch: model returned {tokens}, tokenizer produced {sequence_length}"
-                );
+                )));
             }
 
             let mut results = Vec::with_capacity(*batch_size);
@@ -266,7 +314,9 @@ fn extract_embeddings(
                 }
 
                 if token_count == 0.0 {
-                    bail!("encountered sequence with no attended tokens");
+                    return Err(EmbedError::InvalidResponse(
+                        "encountered sequence with no attended tokens".to_string(),
+                    ));
                 }
 
                 for value in &mut pooled {
@@ -278,19 +328,26 @@ fn extract_embeddings(
 
             Ok(results)
         }
-        _ => bail!("unexpected ONNX output shape: {shape:?}"),
+        _ => Err(EmbedError::InvalidResponse(format!(
+            "unexpected ONNX output shape: {shape:?}"
+        ))),
     }
 }
 
 fn collect_2d_embeddings(value: &ort::value::DynValue) -> Result<Vec<Vec<f32>>> {
-    let array = value.try_extract_array::<f32>()?;
+    let array = value
+        .try_extract_array::<f32>()
+        .map_err(|error| EmbedError::Runtime(error.to_string()))?;
     let shape = array.shape().to_vec();
     let data = array.iter().copied().collect::<Vec<_>>();
 
     match shape.as_slice() {
         [batch_size, dim] => {
             if *dim != EMBEDDING_DIMENSIONS {
-                bail!("unexpected embedding dimension: {dim}");
+                return Err(EmbedError::InvalidDimensions {
+                    expected: EMBEDDING_DIMENSIONS,
+                    actual: *dim,
+                });
             }
 
             Ok(data
@@ -299,7 +356,9 @@ fn collect_2d_embeddings(value: &ort::value::DynValue) -> Result<Vec<Vec<f32>>> 
                 .map(|chunk| chunk.to_vec())
                 .collect())
         }
-        _ => bail!("expected 2D embedding output, got {shape:?}"),
+        _ => Err(EmbedError::InvalidResponse(format!(
+            "expected 2D embedding output, got {shape:?}"
+        ))),
     }
 }
 

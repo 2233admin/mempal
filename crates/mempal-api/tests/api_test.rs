@@ -7,12 +7,12 @@ mod rest_tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
-    use mempal_api::{ApiState, EmbedderFactory, router};
+    use mempal_api::{ApiState, router};
     use mempal_core::{
         db::Database,
         types::{Drawer, SourceType},
     };
-    use mempal_embed::Embedder;
+    use mempal_embed::{Embedder, EmbedderFactory};
     use serde_json::Value;
     use tempfile::tempdir;
     use tower::ServiceExt;
@@ -22,7 +22,10 @@ mod rest_tests {
 
     #[async_trait::async_trait]
     impl Embedder for TestEmbedder {
-        async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        async fn embed(
+            &self,
+            texts: &[&str],
+        ) -> std::result::Result<Vec<Vec<f32>>, mempal_embed::EmbedError> {
             Ok(texts.iter().map(|text| fake_embedding(text)).collect())
         }
 
@@ -40,7 +43,9 @@ mod rest_tests {
 
     #[async_trait::async_trait]
     impl EmbedderFactory for TestEmbedderFactory {
-        async fn build(&self) -> anyhow::Result<Box<dyn Embedder>> {
+        async fn build(
+            &self,
+        ) -> std::result::Result<Box<dyn Embedder>, mempal_embed::EmbedError> {
             Ok(Box::new(TestEmbedder))
         }
     }
@@ -145,6 +150,53 @@ mod rest_tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
         assert!(payload.get("drawer_id").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_api_ingest_defaults_source() {
+        let dir = tempdir().expect("temp dir should exist");
+        let db_path = dir.path().join("palace.db");
+
+        let response = app(db_path.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ingest")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "content": "decided to use Clerk",
+                            "wing": "myapp",
+                            "room": "auth"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let drawer_id = payload
+            .get("drawer_id")
+            .and_then(Value::as_str)
+            .expect("drawer_id should be returned");
+
+        let db = open_db(&db_path);
+        let source_file: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT source_file FROM drawers WHERE id = ?1",
+                [drawer_id],
+                |row| row.get(0),
+            )
+            .expect("source_file query should succeed");
+        assert_eq!(
+            source_file.as_deref(),
+            Some(format!("mempal://drawer/{drawer_id}").as_str())
+        );
     }
 
     #[tokio::test]
