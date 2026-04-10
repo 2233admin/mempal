@@ -11,8 +11,25 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
   check:
     name: ${{ matrix.label }}
+    needs: fmt
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

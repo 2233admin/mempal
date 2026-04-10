@@ -84,7 +84,10 @@ async fn test_api_embedder_config() {
 #[tokio::test]
 async fn test_api_embedder_openai_compatible() {
     async fn handler(Json(payload): Json<Value>) -> Json<Value> {
-        assert_eq!(payload.get("model").and_then(Value::as_str), Some("test-model"));
+        assert_eq!(
+            payload.get("model").and_then(Value::as_str),
+            Some("test-model")
+        );
         assert_eq!(
             payload.get("input").and_then(Value::as_array).map(Vec::len),
             Some(2)
@@ -100,11 +103,16 @@ async fn test_api_embedder_openai_compatible() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let addr = listener.local_addr().expect("listener should expose address");
+    let addr = listener
+        .local_addr()
+        .expect("listener should expose address");
     tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/v1/embeddings", post(handler)))
-            .await
-            .expect("mock server should run");
+        axum::serve(
+            listener,
+            Router::new().route("/v1/embeddings", post(handler)),
+        )
+        .await
+        .expect("mock server should run");
     });
 
     let embedder = ApiEmbedder::new(
@@ -137,11 +145,16 @@ async fn test_api_embedder_ollama_compatible() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let addr = listener.local_addr().expect("listener should expose address");
+    let addr = listener
+        .local_addr()
+        .expect("listener should expose address");
     tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/api/embeddings", post(handler)))
-            .await
-            .expect("mock server should run");
+        axum::serve(
+            listener,
+            Router::new().route("/api/embeddings", post(handler)),
+        )
+        .await
+        .expect("mock server should run");
     });
 
     let embedder = ApiEmbedder::new(

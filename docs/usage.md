@@ -88,11 +88,19 @@ The current CLI accepts `--format convos` as an optional explicit format selecto
 mempal ingest ~/code/myapp --wing myapp --format convos
 ```
 
-The command reports file, chunk, and skip counts:
+Preview an ingest without writing drawers or vectors:
+
+```bash
+mempal ingest ~/code/myapp --wing myapp --dry-run
+```
+
+The command reports dry-run mode plus file, chunk, and skip counts:
 
 ```text
-files=12 chunks=34 skipped=2
+dry_run=false files=12 chunks=34 skipped=2
 ```
+
+Each CLI ingest also appends a JSONL record to `~/.mempal/audit.jsonl` with the directory, wing, dry-run flag, and resulting counts.
 
 ## Search
 
@@ -131,6 +139,7 @@ What you get back:
 - `route`
 
 `route` explains whether the query used explicit filters or taxonomy routing.
+`source_file` is stored relative to the ingest root, so citations stay stable whether the tree was ingested via an absolute or relative path.
 
 ## Wake-Up Summaries
 
@@ -209,10 +218,13 @@ mempal status
 
 The command reports:
 
+- schema version
 - total drawer count
 - taxonomy entry count
 - DB file size
 - per-`wing` and per-`room` drawer counts
+
+Schema version is backed by SQLite `PRAGMA user_version`. On open, `mempal` applies any bundled forward migrations needed to bring an older local database up to the current binary's schema.
 
 ## Benchmark LongMemEval
 

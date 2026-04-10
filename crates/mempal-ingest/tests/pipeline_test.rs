@@ -167,6 +167,26 @@ async fn test_ingest_directory() {
         .query_row("SELECT COUNT(*) FROM drawers", [], |row| row.get(0))
         .expect("drawer count query should succeed");
     assert!(count >= 4);
+
+    let mut statement = db
+        .conn()
+        .prepare("SELECT DISTINCT source_file FROM drawers ORDER BY source_file")
+        .expect("source file query should prepare");
+    let source_files = statement
+        .query_map([], |row| row.get::<_, Option<String>>(0))
+        .expect("source file query should run")
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .expect("source files should load");
+
+    assert_eq!(
+        source_files,
+        vec![
+            Some("README.md".to_string()),
+            Some("src/lib.rs".to_string()),
+            Some("src/main.rs".to_string()),
+            Some("src/nested/util.rs".to_string()),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -179,7 +199,10 @@ async fn test_ingest_routes_room_from_taxonomy() {
     insert_taxonomy(&db, "myproject", "auth", &["auth", "clerk", "login"]);
 
     let file = dir.path().join("decision.md");
-    write_file(&file, "We switched login to Clerk because auth setup was simpler.");
+    write_file(
+        &file,
+        "We switched login to Clerk because auth setup was simpler.",
+    );
 
     ingest_file(&db, &embedder, &file, "myproject", None)
         .await
@@ -213,4 +236,29 @@ async fn test_ingest_routes_to_default_room_when_no_taxonomy_match() {
         .query_row("SELECT room FROM drawers LIMIT 1", [], |row| row.get(0))
         .expect("room query should succeed");
     assert_eq!(room.as_deref(), Some("default"));
+}
+
+#[tokio::test]
+async fn test_ingest_file_stores_source_as_basename() {
+    let dir = tempdir().expect("temp dir should be created");
+    let db_path = dir.path().join("test.db");
+    let db = Database::open(&db_path).expect("database should open");
+    let embedder = TestEmbedder;
+
+    let nested_dir = dir.path().join("notes");
+    fs::create_dir_all(&nested_dir).expect("nested dir should exist");
+    let file = nested_dir.join("decision.md");
+    write_file(&file, "Clerk replaced Auth0 for pricing reasons.");
+
+    ingest_file(&db, &embedder, &file, "myproject", None)
+        .await
+        .expect("file ingest should succeed");
+
+    let source_file: Option<String> = db
+        .conn()
+        .query_row("SELECT source_file FROM drawers LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("source file query should succeed");
+    assert_eq!(source_file.as_deref(), Some("decision.md"));
 }

@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
-use crate::codec::{AaakCodec, EMOTION_SIGNALS};
 #[cfg(test)]
 use crate::codec::FLAG_SIGNALS;
+use crate::codec::{AaakCodec, EMOTION_SIGNALS};
 use crate::model::AaakMeta;
 use crate::parse::ALLOWED_FLAGS;
 
@@ -91,10 +91,7 @@ mod tests {
     fn test_generate_spec_contains_all_flags() {
         let spec = generate_spec();
         for flag in ALLOWED_FLAGS {
-            assert!(
-                spec.contains(flag),
-                "spec should contain flag {flag}"
-            );
+            assert!(spec.contains(flag), "spec should contain flag {flag}");
         }
     }
 

@@ -21,19 +21,8 @@ const BENCH_WING: &str = "longmemeval";
 const DEFAULT_TOP_K: usize = 50;
 const METRIC_KS: [usize; 6] = [1, 3, 5, 10, 30, 50];
 const TECHNICAL_KEYWORDS: &[&str] = &[
-    "code",
-    "python",
-    "function",
-    "bug",
-    "error",
-    "api",
-    "database",
-    "server",
-    "deploy",
-    "git",
-    "test",
-    "debug",
-    "refactor",
+    "code", "python", "function", "bug", "error", "api", "database", "server", "deploy", "git",
+    "test", "debug", "refactor",
 ];
 const PLANNING_KEYWORDS: &[&str] = &[
     "plan",
@@ -60,15 +49,7 @@ const DECISION_KEYWORDS: &[&str] = &[
     "approach",
 ];
 const PERSONAL_KEYWORDS: &[&str] = &[
-    "family",
-    "friend",
-    "birthday",
-    "vacation",
-    "hobby",
-    "health",
-    "feeling",
-    "love",
-    "home",
+    "family", "friend", "birthday", "vacation", "hobby", "health", "feeling", "love", "home",
     "weekend",
 ];
 const KNOWLEDGE_KEYWORDS: &[&str] = &[
@@ -284,7 +265,13 @@ async fn run_benchmark_with_embedder<E: Embedder + ?Sized>(
             push_metric_set(bucket, k, &entry_metrics.session);
         }
 
-        logs.push(build_log_entry(entry, &corpus_items, &rankings, &entry_metrics, args.top_k));
+        logs.push(build_log_entry(
+            entry,
+            &corpus_items,
+            &rankings,
+            &entry_metrics,
+            args.top_k,
+        ));
     }
 
     let elapsed_secs = started.elapsed().as_secs_f64();
@@ -450,7 +437,10 @@ fn install_rooms_taxonomy(db: &Database) -> Result<()> {
             wing: BENCH_WING.to_string(),
             room: (*room).to_string(),
             display_name: Some((*room).to_string()),
-            keywords: keywords.iter().map(|keyword| (*keyword).to_string()).collect(),
+            keywords: keywords
+                .iter()
+                .map(|keyword| (*keyword).to_string())
+                .collect(),
         })
         .with_context(|| format!("failed to install benchmark taxonomy room {room}"))?;
     }
@@ -508,7 +498,9 @@ fn score_entry(
         .collect::<BTreeSet<_>>();
     let answer_turn_ids = corpus_ids
         .iter()
-        .filter(|corpus_id| answer_session_ids.contains(session_id_from_corpus_id(corpus_id).as_str()))
+        .filter(|corpus_id| {
+            answer_session_ids.contains(session_id_from_corpus_id(corpus_id).as_str())
+        })
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
 
@@ -636,7 +628,12 @@ fn print_summary(summary: &BenchmarkSummary) {
     println!();
     println!("  SESSION-LEVEL METRICS:");
     for (&k, &recall) in &summary.session.recall_any {
-        let ndcg = summary.session.ndcg_any.get(&k).copied().unwrap_or_default();
+        let ndcg = summary
+            .session
+            .ndcg_any
+            .get(&k)
+            .copied()
+            .unwrap_or_default();
         println!("    Recall@{k:2}: {recall:.3}    NDCG@{k:2}: {ndcg:.3}");
     }
     println!();
@@ -867,7 +864,11 @@ mod tests {
             BenchMode::Aaak,
         );
 
-        assert!(items[0].retrieval_text.starts_with("V1|longmemeval|benchmark|"));
+        assert!(
+            items[0]
+                .retrieval_text
+                .starts_with("V1|longmemeval|benchmark|")
+        );
         assert!(items[0].retrieval_text.contains("Clerk"));
     }
 
@@ -909,7 +910,10 @@ mod tests {
         assert_eq!(summary.question_count, 1);
         assert_eq!(summary.session.recall_any.get(&1), Some(&1.0));
         assert_eq!(logs.len(), 1);
-        assert_eq!(logs[0].retrieval_results.metrics.session["recall_any@1"], 1.0);
+        assert_eq!(
+            logs[0].retrieval_results.metrics.session["recall_any@1"],
+            1.0
+        );
     }
 
     #[tokio::test]

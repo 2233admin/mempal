@@ -8,7 +8,9 @@ use thiserror::Error;
 
 use crate::types::{Drawer, SourceType, TaxonomyEntry};
 
-const SCHEMA_SQL: &str = r#"
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+const V1_SCHEMA_SQL: &str = r#"
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS drawers (
@@ -76,6 +78,8 @@ pub enum DbError {
     InvalidSourceType(String),
     #[error("failed to register sqlite-vec auto extension: {0}")]
     RegisterVec(String),
+    #[error("database schema version {current} is newer than supported version {supported}")]
+    UnsupportedSchemaVersion { current: u32, supported: u32 },
 }
 
 pub struct Database {
@@ -98,7 +102,7 @@ impl Database {
         register_sqlite_vec()?;
 
         let conn = Connection::open(path)?;
-        conn.execute_batch(SCHEMA_SQL)?;
+        apply_migrations(&conn)?;
 
         Ok(Self {
             conn,
@@ -236,13 +240,11 @@ impl Database {
     }
 
     pub fn drawer_exists(&self, drawer_id: &str) -> Result<bool, DbError> {
-        let exists = self
-            .conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM drawers WHERE id = ?1)",
-                [drawer_id],
-                |row| row.get::<_, i64>(0),
-            )?;
+        let exists = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM drawers WHERE id = ?1)",
+            [drawer_id],
+            |row| row.get::<_, i64>(0),
+        )?;
         Ok(exists == 1)
     }
 
@@ -296,6 +298,53 @@ impl Database {
                 source,
             })
     }
+
+    pub fn schema_version(&self) -> Result<u32, DbError> {
+        read_user_version(&self.conn)
+    }
+}
+
+fn apply_migrations(conn: &Connection) -> Result<(), DbError> {
+    let current_version = read_user_version(conn)?;
+    if current_version > CURRENT_SCHEMA_VERSION {
+        return Err(DbError::UnsupportedSchemaVersion {
+            current: current_version,
+            supported: CURRENT_SCHEMA_VERSION,
+        });
+    }
+
+    for migration in migrations()
+        .iter()
+        .filter(|migration| migration.version > current_version)
+    {
+        conn.execute_batch(migration.sql)?;
+        set_user_version(conn, migration.version)?;
+    }
+
+    Ok(())
+}
+
+fn read_user_version(conn: &Connection) -> Result<u32, DbError> {
+    let version = conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))?;
+    Ok(version)
+}
+
+fn set_user_version(conn: &Connection, version: u32) -> Result<(), DbError> {
+    conn.execute_batch(&format!("PRAGMA user_version = {version};"))?;
+    Ok(())
+}
+
+fn migrations() -> &'static [Migration] {
+    static MIGRATIONS: &[Migration] = &[Migration {
+        version: CURRENT_SCHEMA_VERSION,
+        sql: V1_SCHEMA_SQL,
+    }];
+    MIGRATIONS
+}
+
+struct Migration {
+    version: u32,
+    sql: &'static str,
 }
 
 fn register_sqlite_vec() -> Result<(), DbError> {

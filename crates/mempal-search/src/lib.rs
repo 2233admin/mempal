@@ -172,9 +172,7 @@ pub fn resolve_route(
         });
     }
 
-    let taxonomy = db
-        .taxonomy_entries()
-        .map_err(SearchError::LoadTaxonomy)?;
+    let taxonomy = db.taxonomy_entries().map_err(SearchError::LoadTaxonomy)?;
     let route = route::route_query(query, &taxonomy);
     if route.confidence >= 0.5 {
         return Ok(route);

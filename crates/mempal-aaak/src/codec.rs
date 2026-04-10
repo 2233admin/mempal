@@ -56,36 +56,36 @@ pub(crate) const EMOTION_SIGNALS: &[(&str, &str)] = &[
     ("despair", "despair"),
     ("passion", "passion"),
     // Chinese
-    ("\u{51b3}\u{5b9a}", "determ"),   // 决定
-    ("\u{786e}\u{5b9a}", "determ"),   // 确定
-    ("\u{62c5}\u{5fc3}", "anx"),      // 担心
-    ("\u{7126}\u{8651}", "anx"),      // 焦虑
-    ("\u{5174}\u{594b}", "excite"),   // 兴奋
-    ("\u{6cae}\u{4e27}", "frust"),    // 沮丧
-    ("\u{56f0}\u{60d1}", "confuse"),  // 困惑
-    ("\u{5f00}\u{5fc3}", "joy"),      // 开心
-    ("\u{9ad8}\u{5174}", "joy"),      // 高兴
-    ("\u{60b2}\u{4f24}", "grief"),    // 悲伤
-    ("\u{60ca}\u{8bb6}", "surpr"),    // 惊讶
-    ("\u{611f}\u{6069}", "grat"),     // 感恩
-    ("\u{611f}\u{8c22}", "grat"),     // 感谢
-    ("\u{597d}\u{5947}", "curious"),  // 好奇
-    ("\u{4fe1}\u{4efb}", "trust"),    // 信任
-    ("\u{5e0c}\u{671b}", "hope"),     // 希望
-    ("\u{6050}\u{60e7}", "fear"),     // 恐惧
-    ("\u{5bb3}\u{6015}", "fear"),     // 害怕
-    ("\u{6ee1}\u{610f}", "satis"),    // 满意
-    ("\u{5931}\u{671b}", "grief"),    // 失望
-    ("\u{8f7b}\u{677e}", "relief"),   // 轻松
-    ("\u{653e}\u{5fc3}", "relief"),   // 放心
-    ("\u{7231}", "love"),             // 爱
-    ("\u{6068}", "rage"),             // 恨
-    ("\u{6016}\u{60e7}", "fear"),     // 恐惧
-    ("\u{5e73}\u{9759}", "peace"),    // 平静
-    ("\u{7edd}\u{671b}", "despair"),  // 绝望
-    ("\u{70ed}\u{60c5}", "passion"),  // 热情
-    ("\u{6000}\u{7591}", "doubt"),    // 怀疑
-    ("\u{75b2}\u{60eb}", "exhaust"),  // 疲惫
+    ("\u{51b3}\u{5b9a}", "determ"),  // 决定
+    ("\u{786e}\u{5b9a}", "determ"),  // 确定
+    ("\u{62c5}\u{5fc3}", "anx"),     // 担心
+    ("\u{7126}\u{8651}", "anx"),     // 焦虑
+    ("\u{5174}\u{594b}", "excite"),  // 兴奋
+    ("\u{6cae}\u{4e27}", "frust"),   // 沮丧
+    ("\u{56f0}\u{60d1}", "confuse"), // 困惑
+    ("\u{5f00}\u{5fc3}", "joy"),     // 开心
+    ("\u{9ad8}\u{5174}", "joy"),     // 高兴
+    ("\u{60b2}\u{4f24}", "grief"),   // 悲伤
+    ("\u{60ca}\u{8bb6}", "surpr"),   // 惊讶
+    ("\u{611f}\u{6069}", "grat"),    // 感恩
+    ("\u{611f}\u{8c22}", "grat"),    // 感谢
+    ("\u{597d}\u{5947}", "curious"), // 好奇
+    ("\u{4fe1}\u{4efb}", "trust"),   // 信任
+    ("\u{5e0c}\u{671b}", "hope"),    // 希望
+    ("\u{6050}\u{60e7}", "fear"),    // 恐惧
+    ("\u{5bb3}\u{6015}", "fear"),    // 害怕
+    ("\u{6ee1}\u{610f}", "satis"),   // 满意
+    ("\u{5931}\u{671b}", "grief"),   // 失望
+    ("\u{8f7b}\u{677e}", "relief"),  // 轻松
+    ("\u{653e}\u{5fc3}", "relief"),  // 放心
+    ("\u{7231}", "love"),            // 爱
+    ("\u{6068}", "rage"),            // 恨
+    ("\u{6016}\u{60e7}", "fear"),    // 恐惧
+    ("\u{5e73}\u{9759}", "peace"),   // 平静
+    ("\u{7edd}\u{671b}", "despair"), // 绝望
+    ("\u{70ed}\u{60c5}", "passion"), // 热情
+    ("\u{6000}\u{7591}", "doubt"),   // 怀疑
+    ("\u{75b2}\u{60eb}", "exhaust"), // 疲惫
 ];
 pub(crate) const FLAG_SIGNALS: &[(&str, &str)] = &[
     ("decid", "DECISION"),
@@ -129,36 +129,36 @@ pub(crate) const FLAG_SIGNALS: &[(&str, &str)] = &[
     ("sensitive", "SENSITIVE"),
     ("pii", "SENSITIVE"),
     // Chinese
-    ("\u{51b3}\u{5b9a}", "DECISION"),       // 决定
-    ("\u{9009}\u{62e9}", "DECISION"),       // 选择
-    ("\u{5207}\u{6362}", "DECISION"),       // 切换
-    ("\u{8fc1}\u{79fb}", "DECISION"),       // 迁移
-    ("\u{66ff}\u{6362}", "DECISION"),       // 替换
-    ("\u{63a8}\u{8350}", "DECISION"),       // 推荐
-    ("\u{56e0}\u{4e3a}", "DECISION"),       // 因为
-    ("\u{521b}\u{5efa}", "ORIGIN"),         // 创建
-    ("\u{521b}\u{7acb}", "ORIGIN"),         // 创立
-    ("\u{5f00}\u{59cb}", "ORIGIN"),         // 开始
-    ("\u{7b2c}\u{4e00}\u{6b21}", "ORIGIN"), // 第一次
-    ("\u{6838}\u{5fc3}", "CORE"),           // 核心
-    ("\u{57fa}\u{672c}", "CORE"),           // 基本
-    ("\u{539f}\u{5219}", "CORE"),           // 原则
-    ("\u{4fe1}\u{5ff5}", "CORE"),           // 信念
-    ("\u{8f6c}\u{6298}", "PIVOT"),          // 转折
-    ("\u{7a81}\u{7834}", "PIVOT"),          // 突破
-    ("\u{987f}\u{609f}", "PIVOT"),          // 顿悟
-    ("\u{63a5}\u{53e3}", "TECHNICAL"),      // 接口
+    ("\u{51b3}\u{5b9a}", "DECISION"),          // 决定
+    ("\u{9009}\u{62e9}", "DECISION"),          // 选择
+    ("\u{5207}\u{6362}", "DECISION"),          // 切换
+    ("\u{8fc1}\u{79fb}", "DECISION"),          // 迁移
+    ("\u{66ff}\u{6362}", "DECISION"),          // 替换
+    ("\u{63a8}\u{8350}", "DECISION"),          // 推荐
+    ("\u{56e0}\u{4e3a}", "DECISION"),          // 因为
+    ("\u{521b}\u{5efa}", "ORIGIN"),            // 创建
+    ("\u{521b}\u{7acb}", "ORIGIN"),            // 创立
+    ("\u{5f00}\u{59cb}", "ORIGIN"),            // 开始
+    ("\u{7b2c}\u{4e00}\u{6b21}", "ORIGIN"),    // 第一次
+    ("\u{6838}\u{5fc3}", "CORE"),              // 核心
+    ("\u{57fa}\u{672c}", "CORE"),              // 基本
+    ("\u{539f}\u{5219}", "CORE"),              // 原则
+    ("\u{4fe1}\u{5ff5}", "CORE"),              // 信念
+    ("\u{8f6c}\u{6298}", "PIVOT"),             // 转折
+    ("\u{7a81}\u{7834}", "PIVOT"),             // 突破
+    ("\u{987f}\u{609f}", "PIVOT"),             // 顿悟
+    ("\u{63a5}\u{53e3}", "TECHNICAL"),         // 接口
     ("\u{6570}\u{636e}\u{5e93}", "TECHNICAL"), // 数据库
-    ("\u{67b6}\u{6784}", "TECHNICAL"),      // 架构
-    ("\u{90e8}\u{7f72}", "TECHNICAL"),      // 部署
-    ("\u{6846}\u{67b6}", "TECHNICAL"),      // 框架
+    ("\u{67b6}\u{6784}", "TECHNICAL"),         // 架构
+    ("\u{90e8}\u{7f72}", "TECHNICAL"),         // 部署
+    ("\u{6846}\u{67b6}", "TECHNICAL"),         // 框架
     ("\u{670d}\u{52a1}\u{5668}", "TECHNICAL"), // 服务器
-    ("\u{914d}\u{7f6e}", "TECHNICAL"),      // 配置
-    ("\u{8ba4}\u{8bc1}", "TECHNICAL"),      // 认证
-    ("\u{5bc6}\u{7801}", "SENSITIVE"),      // 密码
-    ("\u{5bc6}\u{94a5}", "SENSITIVE"),      // 密钥
-    ("\u{51ed}\u{8bc1}", "SENSITIVE"),      // 凭证
-    ("\u{9690}\u{79c1}", "SENSITIVE"),      // 隐私
+    ("\u{914d}\u{7f6e}", "TECHNICAL"),         // 配置
+    ("\u{8ba4}\u{8bc1}", "TECHNICAL"),         // 认证
+    ("\u{5bc6}\u{7801}", "SENSITIVE"),         // 密码
+    ("\u{5bc6}\u{94a5}", "SENSITIVE"),         // 密钥
+    ("\u{51ed}\u{8bc1}", "SENSITIVE"),         // 凭证
+    ("\u{9690}\u{79c1}", "SENSITIVE"),         // 隐私
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,7 +434,10 @@ fn detect_emotions(text: &str) -> Vec<String> {
 }
 
 fn infer_weight(flags: &[String]) -> u8 {
-    if flags.iter().any(|flag| flag == "DECISION" || flag == "PIVOT") {
+    if flags
+        .iter()
+        .any(|flag| flag == "DECISION" || flag == "PIVOT")
+    {
         4
     } else if flags.iter().any(|flag| flag == "TECHNICAL") {
         3
@@ -445,8 +448,7 @@ fn infer_weight(flags: &[String]) -> u8 {
 
 fn split_assertions(text: &str) -> Vec<String> {
     text.split([
-        '.', '!', '?', ';',
-        '\u{3002}', // 。
+        '.', '!', '?', ';', '\u{3002}', // 。
         '\u{FF01}', // ！
         '\u{FF1F}', // ？
         '\u{FF1B}', // ；
@@ -590,10 +592,8 @@ fn extract_cjk_entities_from_segment(segment: &str) -> Vec<String> {
 
     for tag in jieba().tag(segment, true) {
         // nr/nrfg/nrt = person name variants, ns = place, nt = org, nz = other proper
-        let is_entity = tag.tag.starts_with("nr")
-            || tag.tag == "ns"
-            || tag.tag == "nt"
-            || tag.tag == "nz";
+        let is_entity =
+            tag.tag.starts_with("nr") || tag.tag == "ns" || tag.tag == "nt" || tag.tag == "nz";
         if !is_entity {
             continue;
         }
@@ -619,11 +619,7 @@ fn extract_cjk_topics_from_segment(segment: &str) -> Vec<String> {
 
     for tag in jieba().tag(segment, true) {
         // Skip proper nouns — they go to entities, not topics
-        if tag.tag.starts_with("nr")
-            || tag.tag == "ns"
-            || tag.tag == "nt"
-            || tag.tag == "nz"
-        {
+        if tag.tag.starts_with("nr") || tag.tag == "ns" || tag.tag == "nt" || tag.tag == "nz" {
             continue;
         }
         // Keep content-bearing POS: nouns (n*), verbs (v*), adjectives (a*)

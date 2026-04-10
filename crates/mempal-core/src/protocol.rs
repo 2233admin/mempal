@@ -58,5 +58,4 @@ Key invariant: mempal stores raw text verbatim. Every search result can be
 traced back to a source_file. If you cannot cite the source, you are guessing."#;
 
 /// The default identity text shown when `~/.mempal/identity.txt` does not exist.
-pub const DEFAULT_IDENTITY_HINT: &str =
-    "(identity not set — create ~/.mempal/identity.txt to define your role, projects, and working style)";
+pub const DEFAULT_IDENTITY_HINT: &str = "(identity not set — create ~/.mempal/identity.txt to define your role, projects, and working style)";

@@ -7,11 +7,7 @@ fn test_route_hit() {
         wing: "myapp".to_string(),
         room: "auth".to_string(),
         display_name: Some("Authentication".to_string()),
-        keywords: vec![
-            "auth".to_string(),
-            "login".to_string(),
-            "clerk".to_string(),
-        ],
+        keywords: vec!["auth".to_string(), "login".to_string(), "clerk".to_string()],
     }];
 
     let decision = route_query("why did we switch to Clerk", &taxonomy);

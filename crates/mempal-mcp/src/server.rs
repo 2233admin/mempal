@@ -46,8 +46,7 @@ impl MempalMcpServer {
 
     pub async fn serve_stdio(
         self,
-    ) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleServer, Self>>
-    {
+    ) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleServer, Self>> {
         self.serve(rmcp::transport::stdio())
             .await
             .context("failed to initialize MCP stdio transport")
@@ -62,9 +61,13 @@ impl MempalMcpServer {
 
 #[tool_router(router = tool_router)]
 impl MempalMcpServer {
-    #[tool(name = "mempal_status", description = "Return drawer counts, taxonomy counts, database size, scope breakdown, the AAAK format spec, and the memory protocol. Call once at session start if you haven't seen the protocol yet.")]
+    #[tool(
+        name = "mempal_status",
+        description = "Return schema version, drawer counts, taxonomy counts, database size, scope breakdown, the AAAK format spec, and the memory protocol. Call once at session start if you haven't seen the protocol yet."
+    )]
     async fn mempal_status(&self) -> std::result::Result<Json<StatusResponse>, ErrorData> {
         let db = self.open_db()?;
+        let schema_version = db.schema_version().map_err(db_error)?;
         let drawer_count = db.drawer_count().map_err(db_error)?;
         let taxonomy_count = db.taxonomy_count().map_err(db_error)?;
         let db_size_bytes = db.database_size_bytes().map_err(db_error)?;
@@ -80,6 +83,7 @@ impl MempalMcpServer {
             .collect();
 
         Ok(Json(StatusResponse {
+            schema_version,
             drawer_count,
             taxonomy_count,
             db_size_bytes,
@@ -89,7 +93,10 @@ impl MempalMcpServer {
         }))
     }
 
-    #[tool(name = "mempal_search", description = "Search persistent project memory via vector embedding with optional wing/room filters. PREFER THIS over grepping files or guessing from general knowledge when answering ANY project-specific question — past decisions, design rationale, implementation details, bug history, how a component works, why something was built a certain way, or any other project knowledge. Every result includes drawer_id and source_file for citation.")]
+    #[tool(
+        name = "mempal_search",
+        description = "Search persistent project memory via vector embedding with optional wing/room filters. PREFER THIS over grepping files or guessing from general knowledge when answering ANY project-specific question — past decisions, design rationale, implementation details, bug history, how a component works, why something was built a certain way, or any other project knowledge. Every result includes drawer_id and source_file for citation."
+    )]
     async fn mempal_search(
         &self,
         Parameters(request): Parameters<SearchRequest>,
@@ -112,18 +119,18 @@ impl MempalMcpServer {
             request.room.as_deref(),
         )
         .map_err(|error| ErrorData::internal_error(format!("routing failed: {error}"), None))?;
-        let results =
-            search_by_vector(&db, &query_vector, route, request.top_k.unwrap_or(10))
-                .map_err(|error| {
-                    ErrorData::internal_error(format!("search failed: {error}"), None)
-                })?;
+        let results = search_by_vector(&db, &query_vector, route, request.top_k.unwrap_or(10))
+            .map_err(|error| ErrorData::internal_error(format!("search failed: {error}"), None))?;
 
         Ok(Json(SearchResponse {
             results: results.into_iter().map(SearchResultDto::from).collect(),
         }))
     }
 
-    #[tool(name = "mempal_ingest", description = "Persist a decision, bug fix, or design insight to project memory. Call this when a decision is reached in conversation — include the rationale, not just the outcome. Wing is required; let mempal auto-route the room.")]
+    #[tool(
+        name = "mempal_ingest",
+        description = "Persist a decision, bug fix, or design insight to project memory. Call this when a decision is reached in conversation — include the rationale, not just the outcome. Wing is required; let mempal auto-route the room."
+    )]
     async fn mempal_ingest(
         &self,
         Parameters(request): Parameters<IngestRequest>,
@@ -134,9 +141,7 @@ impl MempalMcpServer {
         let vector = embedder
             .embed(&[request.content.as_str()])
             .await
-            .map_err(|error| {
-                ErrorData::internal_error(format!("embedding failed: {error}"), None)
-            })?
+            .map_err(|error| ErrorData::internal_error(format!("embedding failed: {error}"), None))?
             .into_iter()
             .next()
             .ok_or_else(|| ErrorData::internal_error("embedder returned no vector", None))?;
@@ -163,7 +168,10 @@ impl MempalMcpServer {
         Ok(Json(IngestResponse { drawer_id }))
     }
 
-    #[tool(name = "mempal_taxonomy", description = "List or edit wing/room taxonomy entries that drive query routing keywords.")]
+    #[tool(
+        name = "mempal_taxonomy",
+        description = "List or edit wing/room taxonomy entries that drive query routing keywords."
+    )]
     async fn mempal_taxonomy(
         &self,
         Parameters(request): Parameters<TaxonomyRequest>,

@@ -64,6 +64,7 @@ pub struct IngestResponse {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct StatusResponse {
+    pub schema_version: u32,
     pub drawer_count: i64,
     pub taxonomy_count: i64,
     pub db_size_bytes: u64,

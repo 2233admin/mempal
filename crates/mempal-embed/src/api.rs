@@ -73,10 +73,7 @@ impl ApiEmbedder {
             })?
             .json::<OpenAiEmbeddingsResponse>()
             .await
-            .map_err(|source| EmbedError::DecodeResponse {
-                endpoint,
-                source,
-            })?;
+            .map_err(|source| EmbedError::DecodeResponse { endpoint, source })?;
 
         let vectors = response
             .data
@@ -185,7 +182,5 @@ fn json_number_to_f32(value: &Value) -> Result<f32> {
     value
         .as_f64()
         .map(|number| number as f32)
-        .ok_or_else(|| {
-            EmbedError::InvalidResponse("embedding element was not numeric".to_string())
-        })
+        .ok_or_else(|| EmbedError::InvalidResponse("embedding element was not numeric".to_string()))
 }

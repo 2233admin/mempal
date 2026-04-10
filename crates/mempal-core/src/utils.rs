@@ -40,11 +40,7 @@ pub fn source_file_or_synthetic(drawer_id: &str, source_file: Option<&str>) -> S
         .unwrap_or_else(|| synthetic_source_file(drawer_id))
 }
 
-pub fn route_room_from_taxonomy(
-    content: &str,
-    wing: &str,
-    taxonomy: &[TaxonomyEntry],
-) -> String {
+pub fn route_room_from_taxonomy(content: &str, wing: &str, taxonomy: &[TaxonomyEntry]) -> String {
     let normalized_content = content.to_lowercase();
     let content_terms = content_terms(&normalized_content);
 
@@ -102,7 +98,8 @@ fn matched_keywords(
         .map(|keyword| keyword.trim().to_lowercase())
         .filter(|keyword| {
             !keyword.is_empty()
-                && (content_terms.contains(keyword) || normalized_content.contains(keyword.as_str()))
+                && (content_terms.contains(keyword)
+                    || normalized_content.contains(keyword.as_str()))
         })
         .collect()
 }

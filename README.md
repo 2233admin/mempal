@@ -33,6 +33,7 @@ Index a project and search it:
 ```bash
 mempal init ~/code/myapp
 mempal ingest ~/code/myapp --wing myapp
+mempal ingest ~/code/myapp --wing myapp --dry-run
 mempal search "auth decision clerk" --json
 mempal wake-up
 ```
@@ -82,7 +83,7 @@ api_model = "nomic-embed-text"
 `mempal` currently exposes these subcommands:
 
 - `init`: infer taxonomy rooms from a project tree and seed the taxonomy table.
-- `ingest`: detect files, normalize content, chunk, embed, and store drawers.
+- `ingest`: detect files, normalize content, chunk, embed, and store drawers. `--dry-run` previews file/chunk/skip counts without writing drawers or vectors.
 - `search`: vector search with optional `wing` and `room` filters.
 - `wake-up`: emit a short memory summary for agent context refresh.
 - `compress`: convert arbitrary text into AAAK output.
@@ -90,6 +91,7 @@ api_model = "nomic-embed-text"
 - `taxonomy`: list or edit taxonomy entries.
 - `serve`: run MCP stdio, and with `rest` enabled also run the local REST API.
 - `status`: print drawer counts, taxonomy counts, DB size, and per-scope counts.
+- `status`: print schema version, drawer counts, taxonomy counts, DB size, and per-scope counts.
 
 For exact CLI syntax:
 
@@ -256,8 +258,10 @@ For the full format spec, see [`docs/aaak-dialect.md`](docs/aaak-dialect.md).
 ## Architecture Notes
 
 - Storage is always raw-first: drawer text lives in `drawers`, vectors live in `drawer_vectors`.
+- SQLite schema version is tracked via `PRAGMA user_version`; opening the database applies bundled forward migrations up to the current binary's supported version.
 - AAAK is output-only and is not part of ingest or search internals.
 - Search results are citation-bearing by construction.
+- `source_file` values are stored relative to the ingest root, so re-ingesting the same tree via absolute or relative paths stays citation-stable.
 - Routing is deterministic and explainable through `route.reason` and `route.confidence`.
 - The repository is organized as a workspace:
 

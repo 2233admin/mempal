@@ -91,7 +91,9 @@ pub enum EmbedError {
     InvalidResponse(String),
     #[error("embedding endpoint returned no vectors")]
     EmptyVectors,
-    #[error("embedding endpoint returned vectors with unexpected dimensions; expected {expected}, got {actual}")]
+    #[error(
+        "embedding endpoint returned vectors with unexpected dimensions; expected {expected}, got {actual}"
+    )]
     InvalidDimensions { expected: usize, actual: usize },
     #[error("unsupported embed backend: {0}")]
     UnsupportedBackend(String),

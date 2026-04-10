@@ -83,14 +83,15 @@ impl Embedder for OnnxEmbedder {
             drop(tokenizer);
 
             let batch_size = encoded.len();
-            let sequence_length = encoded
-                .first()
-                .map(|encoding| encoding.len())
-                .ok_or_else(|| {
-                    EmbedError::Runtime(
-                        "tokenizer returned no encodings for non-empty input".to_string(),
-                    )
-                })?;
+            let sequence_length =
+                encoded
+                    .first()
+                    .map(|encoding| encoding.len())
+                    .ok_or_else(|| {
+                        EmbedError::Runtime(
+                            "tokenizer returned no encodings for non-empty input".to_string(),
+                        )
+                    })?;
 
             let input_ids = encoded
                 .iter()
@@ -156,11 +157,9 @@ impl Embedder for OnnxEmbedder {
                 ));
             }
 
-            let outputs = session
-                .run(inputs)
-                .map_err(|error| {
-                    EmbedError::Runtime(format!("failed to run ONNX embedding session: {error}"))
-                })?;
+            let outputs = session.run(inputs).map_err(|error| {
+                EmbedError::Runtime(format!("failed to run ONNX embedding session: {error}"))
+            })?;
 
             extract_embeddings(outputs, &attention_mask, sequence_length)
         })

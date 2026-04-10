@@ -1,5 +1,6 @@
 use mempal_core::db::Database;
 use mempal_core::types::{Drawer, SourceType};
+use rusqlite::Connection;
 use rusqlite::Row;
 use tempfile::tempdir;
 
@@ -24,6 +25,9 @@ fn test_db_init() {
     assert!(tables.contains(&"drawer_vectors".to_string()));
     assert!(tables.contains(&"triples".to_string()));
     assert!(tables.contains(&"taxonomy".to_string()));
+
+    let schema_version: u32 = db.schema_version().expect("schema version should load");
+    assert_eq!(schema_version, 1);
 
     let indexes: Vec<String> = db
         .conn()
@@ -66,5 +70,52 @@ fn test_db_idempotent() {
         })
         .expect("count query should succeed");
 
+    assert_eq!(count, 1);
+    assert_eq!(
+        reopened
+            .schema_version()
+            .expect("schema version should load after reopen"),
+        1
+    );
+}
+
+#[test]
+fn test_db_migrates_legacy_schema_without_user_version() {
+    let dir = tempdir().expect("temp dir should be created");
+    let path = dir.path().join("legacy.db");
+    let conn = Connection::open(&path).expect("legacy db should open");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE drawers (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            wing TEXT NOT NULL,
+            room TEXT,
+            source_file TEXT,
+            source_type TEXT NOT NULL,
+            added_at TEXT NOT NULL,
+            chunk_index INTEGER
+        );
+        INSERT INTO drawers (id, content, wing, room, source_file, source_type, added_at, chunk_index)
+        VALUES ('legacy', 'hello', 'myapp', NULL, 'README.md', 'project', '2026-04-10', 0);
+        "#,
+    )
+    .expect("legacy schema should initialize");
+    drop(conn);
+
+    let db = Database::open(&path).expect("database should migrate legacy schema");
+
+    assert_eq!(
+        db.schema_version()
+            .expect("schema version should be upgraded"),
+        1
+    );
+
+    let count: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM drawers", [], |row: &Row<'_>| {
+            row.get::<_, i64>(0)
+        })
+        .expect("drawer count query should succeed");
     assert_eq!(count, 1);
 }

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use mempal_aaak::{AaakCodec, AaakDocument, AaakHeader, AaakLine, AaakMeta, ArcLine, Tunnel, Zettel};
+use mempal_aaak::{
+    AaakCodec, AaakDocument, AaakHeader, AaakLine, AaakMeta, ArcLine, Tunnel, Zettel,
+};
 
 fn meta() -> AaakMeta {
     AaakMeta {
@@ -40,10 +42,12 @@ fn test_aaak_encode_entity_codes_stay_within_bnf() {
     let codec = AaakCodec::default();
     let output = codec.encode("R2D2 recommended Clerk for auth.", &meta());
 
-    assert!(output.document.zettels[0]
-        .entities
-        .iter()
-        .all(|entity| entity.len() == 3 && entity.chars().all(|ch| ch.is_ascii_uppercase())));
+    assert!(
+        output.document.zettels[0]
+            .entities
+            .iter()
+            .all(|entity| entity.len() == 3 && entity.chars().all(|ch| ch.is_ascii_uppercase()))
+    );
     AaakDocument::parse(&output.document.to_string()).expect("encoded output should parse");
 }
 
@@ -108,10 +112,8 @@ fn test_aaak_roundtrip_reports_lost_assertions() {
 
 #[test]
 fn test_entity_bimap() {
-    let codec = AaakCodec::with_entity_aliases(BTreeMap::from([(
-        "Alice".to_string(),
-        "ALC".to_string(),
-    )]));
+    let codec =
+        AaakCodec::with_entity_aliases(BTreeMap::from([("Alice".to_string(), "ALC".to_string())]));
     let output = codec.encode("Alice finalized the rollout plan", &meta());
     let encoded = output.document.to_string();
     assert!(encoded.contains("ALC"));
@@ -134,8 +136,7 @@ fn test_aaak_parse() {
 
 #[test]
 fn test_aaak_parse_accepts_tunnel_and_arc_lines() {
-    let input =
-        "V1|myapp|auth|2026-04-08|readme\n0:KAI|clerk_auth|\"use Clerk\"|★★★★|determ|DECISION\n1:CLK|auth_rollout|\"roll out Clerk\"|★★★|relief|TECHNICAL\nT:0<->1|auth_link\nARC:anx->determ->relief";
+    let input = "V1|myapp|auth|2026-04-08|readme\n0:KAI|clerk_auth|\"use Clerk\"|★★★★|determ|DECISION\n1:CLK|auth_rollout|\"roll out Clerk\"|★★★|relief|TECHNICAL\nT:0<->1|auth_link\nARC:anx->determ->relief";
     let document = AaakDocument::parse(input).expect("document should parse");
 
     assert_eq!(document.zettels.len(), 2);
@@ -150,8 +151,7 @@ fn test_aaak_parse_accepts_tunnel_and_arc_lines() {
 
 #[test]
 fn test_aaak_display_preserves_tunnel_and_arc_lines() {
-    let input =
-        "V1|myapp|auth|2026-04-08|readme\n0:KAI|clerk_auth|\"use Clerk\"|★★★★|determ|DECISION\n1:CLK|auth_rollout|\"roll out Clerk\"|★★★|relief|TECHNICAL\nT:0<->1|auth_link\nARC:anx->determ->relief";
+    let input = "V1|myapp|auth|2026-04-08|readme\n0:KAI|clerk_auth|\"use Clerk\"|★★★★|determ|DECISION\n1:CLK|auth_rollout|\"roll out Clerk\"|★★★|relief|TECHNICAL\nT:0<->1|auth_link\nARC:anx->determ->relief";
     let document = AaakDocument::parse(input).expect("document should parse");
 
     assert_eq!(document.to_string(), input);
@@ -159,7 +159,8 @@ fn test_aaak_display_preserves_tunnel_and_arc_lines() {
 
 #[test]
 fn test_aaak_decode_prefers_body_over_stale_zettels() {
-    let codec = AaakCodec::with_entity_aliases(BTreeMap::from([("Kai".to_string(), "KAI".to_string())]));
+    let codec =
+        AaakCodec::with_entity_aliases(BTreeMap::from([("Kai".to_string(), "KAI".to_string())]));
     let document = AaakDocument {
         header: AaakHeader {
             version: 1,
@@ -389,10 +390,8 @@ fn test_aaak_encode_mixed_script_text_extracts_cjk_and_ascii_entities() {
 
 #[test]
 fn test_aaak_encode_pure_chinese_text_extracts_leading_name_entity() {
-    let codec = AaakCodec::with_entity_aliases(BTreeMap::from([(
-        "李四".to_string(),
-        "LSI".to_string(),
-    )]));
+    let codec =
+        AaakCodec::with_entity_aliases(BTreeMap::from([("李四".to_string(), "LSI".to_string())]));
     let output = codec.encode("李四推荐了新的数据库架构", &meta());
 
     assert!(

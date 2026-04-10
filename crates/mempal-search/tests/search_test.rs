@@ -274,7 +274,11 @@ async fn test_search_routes_from_taxonomy() {
         .expect("search should succeed");
 
     assert!(!results.is_empty());
-    assert!(results.iter().all(|result| result.room.as_deref() == Some("auth")));
+    assert!(
+        results
+            .iter()
+            .all(|result| result.room.as_deref() == Some("auth"))
+    );
     assert_eq!(results[0].route.wing.as_deref(), Some("myapp"));
     assert_eq!(results[0].route.room.as_deref(), Some("auth"));
     assert!(results[0].route.confidence >= 0.5);

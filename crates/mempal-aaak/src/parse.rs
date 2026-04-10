@@ -102,7 +102,8 @@ fn parse_zettel(line: &str) -> Result<Zettel, ParseError> {
     }
 
     let quote = parse_quote(parts[2]).ok_or_else(|| ParseError::InvalidZettel(line.to_string()))?;
-    let weight = parse_weight(parts[3]).ok_or_else(|| ParseError::InvalidZettel(line.to_string()))?;
+    let weight =
+        parse_weight(parts[3]).ok_or_else(|| ParseError::InvalidZettel(line.to_string()))?;
 
     let emotions = split_field(parts[4], '+');
     if emotions.is_empty() || emotions.iter().any(|emotion| !is_emotion_code(emotion)) {
@@ -110,7 +111,11 @@ fn parse_zettel(line: &str) -> Result<Zettel, ParseError> {
     }
 
     let flags = split_field(parts[5], '+');
-    if flags.is_empty() || flags.iter().any(|flag| !ALLOWED_FLAGS.contains(&flag.as_str())) {
+    if flags.is_empty()
+        || flags
+            .iter()
+            .any(|flag| !ALLOWED_FLAGS.contains(&flag.as_str()))
+    {
         return Err(ParseError::InvalidZettel(line.to_string()));
     }
 

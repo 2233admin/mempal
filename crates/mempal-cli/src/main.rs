@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "rest")]
 use std::sync::Arc;
@@ -17,7 +19,7 @@ use mempal_core::{
     utils::current_timestamp,
 };
 use mempal_embed::{ConfiguredEmbedderFactory, Embedder};
-use mempal_ingest::ingest_dir;
+use mempal_ingest::{IngestOptions, IngestStats, ingest_dir, ingest_dir_with_options};
 use mempal_mcp::MempalMcpServer;
 use mempal_search::search;
 
@@ -43,6 +45,8 @@ enum Commands {
         wing: String,
         #[arg(long)]
         format: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
     },
     Search {
         query: String,
@@ -126,9 +130,12 @@ async fn run() -> Result<()> {
 
     match cli.command {
         Commands::Init { dir } => init_command(&db, &dir),
-        Commands::Ingest { dir, wing, format } => {
-            ingest_command(&db, &config, &dir, &wing, format).await
-        }
+        Commands::Ingest {
+            dir,
+            wing,
+            format,
+            dry_run,
+        } => ingest_command(&db, &config, &dir, &wing, format, dry_run).await,
         Commands::Search {
             query,
             wing,
@@ -222,6 +229,7 @@ async fn ingest_command(
     dir: &Path,
     wing: &str,
     format: Option<String>,
+    dry_run: bool,
 ) -> Result<()> {
     if let Some(format) = format.as_deref()
         && format != "convos"
@@ -229,14 +237,87 @@ async fn ingest_command(
         bail!("unsupported --format value: {format}");
     }
 
-    let embedder = build_embedder(config).await?;
-    let stats = ingest_dir(db, &*embedder, dir, wing, None).await?;
+    let stats = if dry_run {
+        ingest_dir_with_options(
+            db,
+            &NoopEmbedder,
+            dir,
+            wing,
+            IngestOptions {
+                room: None,
+                source_root: Some(dir),
+                dry_run: true,
+            },
+        )
+        .await?
+    } else {
+        let embedder = build_embedder(config).await?;
+        ingest_dir(db, &*embedder, dir, wing, None).await?
+    };
+
+    append_ingest_audit_log(db, dir, wing, format.as_deref(), dry_run, stats)
+        .context("failed to append ingest audit log")?;
 
     println!(
-        "files={} chunks={} skipped={}",
-        stats.files, stats.chunks, stats.skipped
+        "dry_run={} files={} chunks={} skipped={}",
+        dry_run, stats.files, stats.chunks, stats.skipped
     );
 
+    Ok(())
+}
+
+#[derive(Default)]
+struct NoopEmbedder;
+
+#[async_trait::async_trait]
+impl Embedder for NoopEmbedder {
+    async fn embed(
+        &self,
+        _texts: &[&str],
+    ) -> std::result::Result<Vec<Vec<f32>>, mempal_embed::EmbedError> {
+        Ok(Vec::new())
+    }
+
+    fn dimensions(&self) -> usize {
+        384
+    }
+
+    fn name(&self) -> &str {
+        "noop"
+    }
+}
+
+fn append_ingest_audit_log(
+    db: &Database,
+    dir: &Path,
+    wing: &str,
+    format: Option<&str>,
+    dry_run: bool,
+    stats: IngestStats,
+) -> Result<()> {
+    let audit_path = db
+        .path()
+        .parent()
+        .map(|parent| parent.join("audit.jsonl"))
+        .unwrap_or_else(|| PathBuf::from("audit.jsonl"));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .with_context(|| format!("failed to open audit log {}", audit_path.display()))?;
+    let entry = serde_json::json!({
+        "timestamp": current_timestamp(),
+        "command": "ingest",
+        "wing": wing,
+        "dir": dir.to_string_lossy(),
+        "format": format,
+        "dry_run": dry_run,
+        "files": stats.files,
+        "chunks": stats.chunks,
+        "skipped": stats.skipped,
+    });
+    writeln!(file, "{entry}")
+        .with_context(|| format!("failed to write audit log {}", audit_path.display()))?;
     Ok(())
 }
 
@@ -462,12 +543,16 @@ fn taxonomy_edit_command(db: &Database, wing: &str, room: &str, keywords: &str) 
 }
 
 fn status_command(db: &Database) -> Result<()> {
+    let schema_version = db
+        .schema_version()
+        .context("failed to read schema version")?;
     let drawer_count = db.drawer_count().context("failed to count drawers")?;
     let taxonomy_count = db.taxonomy_count().context("failed to count taxonomy")?;
     let db_size_bytes = db
         .database_size_bytes()
         .context("failed to compute database size")?;
 
+    println!("schema_version: {schema_version}");
     println!("drawer_count: {drawer_count}");
     println!("taxonomy_entries: {taxonomy_count}");
     println!("db_size_bytes: {db_size_bytes}");

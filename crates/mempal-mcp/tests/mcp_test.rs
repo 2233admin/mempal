@@ -7,10 +7,7 @@ use mempal_core::{
 };
 use mempal_embed::{Embedder, EmbedderFactory};
 use mempal_mcp::MempalMcpServer;
-use rmcp::{
-    ServiceExt,
-    model::CallToolRequestParams,
-};
+use rmcp::{ServiceExt, model::CallToolRequestParams};
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -40,9 +37,7 @@ struct TestEmbedderFactory;
 
 #[async_trait::async_trait]
 impl EmbedderFactory for TestEmbedderFactory {
-    async fn build(
-        &self,
-    ) -> std::result::Result<Box<dyn Embedder>, mempal_embed::EmbedError> {
+    async fn build(&self) -> std::result::Result<Box<dyn Embedder>, mempal_embed::EmbedError> {
         Ok(Box::new(TestEmbedder))
     }
 }
@@ -82,7 +77,9 @@ fn insert_drawer(db: &Database, id: &str, content: &str, wing: &str, room: Optio
         .expect("vector insert should succeed");
 }
 
-async fn spawn_server(db_path: PathBuf) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
+async fn spawn_server(
+    db_path: PathBuf,
+) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server = MempalMcpServer::new_with_factory(db_path, Arc::new(TestEmbedderFactory));
     tokio::spawn(async move {
@@ -101,7 +98,10 @@ async fn test_mcp_server_start() -> anyhow::Result<()> {
     let client = spawn_server(dir.path().join("palace.db")).await?;
 
     let tools = client.list_all_tools().await?;
-    let names = tools.iter().map(|tool| tool.name.as_ref()).collect::<Vec<_>>();
+    let names = tools
+        .iter()
+        .map(|tool| tool.name.as_ref())
+        .collect::<Vec<_>>();
 
     assert_eq!(names.len(), 4);
     assert!(names.contains(&"mempal_status"));
@@ -208,7 +208,9 @@ async fn test_mcp_search() -> anyhow::Result<()> {
         )
         .await?;
 
-    let payload = result.structured_content.expect("structured result should exist");
+    let payload = result
+        .structured_content
+        .expect("structured result should exist");
     let first = payload
         .get("results")
         .and_then(Value::as_array)
@@ -244,7 +246,9 @@ async fn test_mcp_ingest() -> anyhow::Result<()> {
         )
         .await?;
 
-    let payload = result.structured_content.expect("structured result should exist");
+    let payload = result
+        .structured_content
+        .expect("structured result should exist");
     let drawer_id = payload
         .get("drawer_id")
         .and_then(Value::as_str)
@@ -283,7 +287,9 @@ async fn test_mcp_ingest_defaults_source() -> anyhow::Result<()> {
         )
         .await?;
 
-    let payload = result.structured_content.expect("structured result should exist");
+    let payload = result
+        .structured_content
+        .expect("structured result should exist");
     let drawer_id = payload
         .get("drawer_id")
         .and_then(Value::as_str)
@@ -319,7 +325,13 @@ async fn test_mcp_status_and_taxonomy() -> anyhow::Result<()> {
     let status = client
         .call_tool(CallToolRequestParams::new("mempal_status"))
         .await?;
-    let status_payload = status.structured_content.expect("status payload should exist");
+    let status_payload = status
+        .structured_content
+        .expect("status payload should exist");
+    assert_eq!(
+        status_payload.get("schema_version").and_then(Value::as_u64),
+        Some(1)
+    );
     assert_eq!(
         status_payload.get("drawer_count").and_then(Value::as_i64),
         Some(1)

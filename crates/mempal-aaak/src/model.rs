@@ -125,11 +125,7 @@ impl AaakDocument {
             return self.body.clone();
         }
 
-        self.zettels
-            .iter()
-            .cloned()
-            .map(AaakLine::Zettel)
-            .collect()
+        self.zettels.iter().cloned().map(AaakLine::Zettel).collect()
     }
 }
 

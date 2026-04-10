@@ -43,9 +43,7 @@ mod rest_tests {
 
     #[async_trait::async_trait]
     impl EmbedderFactory for TestEmbedderFactory {
-        async fn build(
-            &self,
-        ) -> std::result::Result<Box<dyn Embedder>, mempal_embed::EmbedError> {
+        async fn build(&self) -> std::result::Result<Box<dyn Embedder>, mempal_embed::EmbedError> {
             Ok(Box::new(TestEmbedder))
         }
     }
@@ -86,10 +84,7 @@ mod rest_tests {
     }
 
     fn app(db_path: PathBuf) -> axum::Router {
-        router(ApiState::new(
-            db_path,
-            Arc::new(TestEmbedderFactory),
-        ))
+        router(ApiState::new(db_path, Arc::new(TestEmbedderFactory)))
     }
 
     #[tokio::test]
@@ -254,5 +249,7 @@ mod rest_tests {
 #[cfg(not(feature = "rest"))]
 #[test]
 fn test_no_rest_feature() {
-    const { assert!(!cfg!(feature = "rest")); }
+    const {
+        assert!(!cfg!(feature = "rest"));
+    }
 }

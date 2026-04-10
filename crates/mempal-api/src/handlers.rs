@@ -1,10 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::{
-        HeaderValue, Method, StatusCode,
-        header::CONTENT_TYPE,
-    },
+    http::{HeaderValue, Method, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -124,35 +121,55 @@ async fn search_handler(
     State(state): State<ApiState>,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<SearchResultDto>>, ApiError> {
-    let embedder = state.embedder_factory.build().await.map_err(internal_error)?;
+    let embedder = state
+        .embedder_factory
+        .build()
+        .await
+        .map_err(internal_error)?;
     let query_vector = embedder
         .embed(&[query.q.as_str()])
         .await
         .map_err(internal_error)?
         .into_iter()
         .next()
-        .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "embedder returned no vector"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "embedder returned no vector",
+            )
+        })?;
     let db = Database::open(&state.db_path).map_err(internal_error)?;
     let route = resolve_route(&db, &query.q, query.wing.as_deref(), query.room.as_deref())
         .map_err(internal_error)?;
     let results = search_by_vector(&db, &query_vector, route, query.top_k.unwrap_or(10))
         .map_err(internal_error)?;
 
-    Ok(Json(results.into_iter().map(SearchResultDto::from).collect()))
+    Ok(Json(
+        results.into_iter().map(SearchResultDto::from).collect(),
+    ))
 }
 
 async fn ingest_handler(
     State(state): State<ApiState>,
     Json(request): Json<IngestRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let embedder = state.embedder_factory.build().await.map_err(internal_error)?;
+    let embedder = state
+        .embedder_factory
+        .build()
+        .await
+        .map_err(internal_error)?;
     let vector = embedder
         .embed(&[request.content.as_str()])
         .await
         .map_err(internal_error)?
         .into_iter()
         .next()
-        .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "embedder returned no vector"))?;
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "embedder returned no vector",
+            )
+        })?;
     let db = Database::open(&state.db_path).map_err(internal_error)?;
     let drawer_id = build_drawer_id(&request.wing, request.room.as_deref(), &request.content);
 
@@ -169,7 +186,8 @@ async fn ingest_handler(
             chunk_index: Some(0),
         })
         .map_err(internal_error)?;
-        db.insert_vector(&drawer_id, &vector).map_err(internal_error)?;
+        db.insert_vector(&drawer_id, &vector)
+            .map_err(internal_error)?;
     }
 
     Ok((StatusCode::CREATED, Json(IngestResponse { drawer_id })))

@@ -119,6 +119,60 @@ fn test_e2e_init_ingest_search() {
 }
 
 #[test]
+fn test_cli_ingest_dry_run_does_not_persist_and_writes_audit_log() {
+    let home = tempdir().expect("home temp dir should be created");
+    let project = tempdir().expect("project temp dir should be created");
+    let mempal_dir = home.path().join(".mempal");
+    fs::create_dir_all(&mempal_dir).expect("mempal dir should exist");
+    write_file(
+        &mempal_dir.join("config.toml"),
+        "[embed]\nbackend = \"bogus\"\n",
+    );
+    write_file(
+        &project.path().join("README.md"),
+        "We chose SQLite because single-file deployment is simpler.",
+    );
+
+    let output = run_cli(
+        home.path(),
+        &[
+            "ingest",
+            project.path().to_str().expect("valid path"),
+            "--wing",
+            "myproject",
+            "--dry-run",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "dry-run ingest failed: {:?}",
+        output
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("dry_run=true"));
+    assert!(stdout.contains("files=1"));
+    assert!(stdout.contains("chunks=1"));
+
+    let db = seed_db(home.path());
+    let drawer_count: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM drawers", [], |row| row.get(0))
+        .expect("drawer count query should succeed");
+    let vector_count: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM drawer_vectors", [], |row| row.get(0))
+        .expect("vector count query should succeed");
+    assert_eq!(drawer_count, 0);
+    assert_eq!(vector_count, 0);
+
+    let audit_path = mempal_dir.join("audit.jsonl");
+    let audit = fs::read_to_string(audit_path).expect("audit log should be written");
+    assert!(audit.contains("\"dry_run\":true"));
+    assert!(audit.contains("\"command\":\"ingest\""));
+}
+
+#[test]
 fn test_cli_wakeup() {
     let home = tempdir().expect("home temp dir should be created");
     let db = seed_db(home.path());
@@ -157,6 +211,7 @@ fn test_cli_status() {
     let output = run_cli(home.path(), &["status"]);
     assert!(output.status.success(), "status failed: {:?}", output);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("schema_version"));
     assert!(stdout.contains("drawer_count"));
     assert!(stdout.contains("db_size_bytes"));
     assert!(stdout.contains("myapp/auth"));
@@ -214,7 +269,11 @@ fn test_cli_serve_help() {
 fn test_cli_longmemeval_help() {
     let home = tempdir().expect("home temp dir should be created");
     let output = run_cli(home.path(), &["bench", "longmemeval", "--help"]);
-    assert!(output.status.success(), "bench longmemeval --help failed: {:?}", output);
+    assert!(
+        output.status.success(),
+        "bench longmemeval --help failed: {:?}",
+        output
+    );
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("longmemeval"));
@@ -277,7 +336,10 @@ fn test_cli_compress_outputs_valid_aaak_without_named_entities() {
 #[test]
 fn test_cli_compress_mixed_chinese_and_ascii_keeps_ascii_entities() {
     let home = tempdir().expect("home temp dir should be created");
-    let output = run_cli(home.path(), &["compress", "张三决定用Clerk替换Auth0，因为价格更优。"]);
+    let output = run_cli(
+        home.path(),
+        &["compress", "张三决定用Clerk替换Auth0，因为价格更优。"],
+    );
     assert!(output.status.success(), "compress failed: {:?}", output);
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
