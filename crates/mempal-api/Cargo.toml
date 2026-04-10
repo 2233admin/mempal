@@ -3,6 +3,12 @@ name = "mempal-api"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Feature-gated REST API for mempal."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
 
 [features]
 default = []
@@ -10,9 +16,9 @@ rest = ["dep:axum", "dep:tower-http", "dep:tokio"]
 
 [dependencies]
 axum = { workspace = true, optional = true }
-mempal-core = { path = "../mempal-core" }
-mempal-embed = { path = "../mempal-embed" }
-mempal-search = { path = "../mempal-search" }
+mempal-core = { path = "../mempal-core", version = "0.1.0" }
+mempal-embed = { path = "../mempal-embed", version = "0.1.0" }
+mempal-search = { path = "../mempal-search", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, optional = true }

@@ -3,10 +3,16 @@ name = "mempal-embed"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Embedding backends and factories for mempal."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
 
 [dependencies]
 async-trait.workspace = true
-mempal-core = { path = "../mempal-core" }
+mempal-core = { path = "../mempal-core", version = "0.1.0" }
 ort.workspace = true
 reqwest.workspace = true
 serde.workspace = true

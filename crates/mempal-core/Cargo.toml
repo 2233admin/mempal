@@ -3,6 +3,12 @@ name = "mempal-core"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description = "Core data types, SQLite storage, and taxonomy utilities for mempal."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
 
 [dependencies]
 rusqlite.workspace = true

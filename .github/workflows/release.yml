@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features
+
+      - name: cargo build --workspace --release --all-features
+        run: cargo build --workspace --release --all-features
+
+      - name: Package crates in publish order
+        run: |
+          set -euxo pipefail
+          cargo package -p mempal-core --locked
+          cargo package -p mempal-embed --locked
+          cargo package -p mempal-search --locked
+          cargo package -p mempal-ingest --locked
+          cargo package -p mempal-aaak --locked
+          cargo package -p mempal-mcp --locked
+          cargo package -p mempal-api --locked
+          cargo package -p mempal-cli --locked
+
+      - name: Collect release binary
+        run: |
+          mkdir -p dist
+          cp target/release/mempal dist/mempal-x86_64-unknown-linux-gnu
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mempal-release-artifacts
+          path: |
+            dist/*
+            target/package/*.crate
