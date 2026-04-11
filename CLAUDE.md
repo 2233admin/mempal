@@ -112,3 +112,15 @@ crates/
 - 异步：`tokio`，features=["full"]
 - 不用 `.unwrap()`，用 `?` 或 `.expect("reason")`
 - 每次 commit 后：调 `mempal_ingest` 存决策记忆（Rule 4）
+
+## Auto-Dream 集成
+
+当 Claude Code 执行 auto-dream 或手动 dream 时：
+
+1. **验证**：调 `mempal_search` 核实正在整理的事实是否与 mempal 记忆一致
+2. **保存**：将整理后的高价值洞察存到 mempal（`mempal_ingest`，importance >= 3）
+3. **解矛盾**：MEMORY.md 与 mempal drawer 矛盾时，以 mempal 为准（mempal 有出处引用）
+4. **写日记**：将 dream 摘要存为 agent diary（`wing="agent-diary"`, `room="claude"`）
+5. **清理 KG**：检查 triples 中是否有过期关系需要 invalidate
+
+Dream 是 mempal 的"REM 睡眠"——短期 session 记忆被整理为长期项目记忆。

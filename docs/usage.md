@@ -54,10 +54,20 @@ Default config:
 db_path = "~/.mempal/palace.db"
 
 [embed]
+backend = "model2vec"
+# model = "minishlab/potion-multilingual-128M" # default multilingual model
+```
+
+Use local ONNX instead of the default model2vec backend:
+
+```toml
+db_path = "~/.mempal/palace.db"
+
+[embed]
 backend = "onnx"
 ```
 
-Use an external embedding API instead of local ONNX:
+Use an external embedding API instead of local embeddings:
 
 ```toml
 db_path = "~/.mempal/palace.db"
@@ -70,8 +80,9 @@ api_model = "nomic-embed-text"
 
 Notes:
 
-- ONNX is the default backend.
-- First ONNX use downloads `all-MiniLM-L6-v2` model assets.
+- `model2vec` is the default backend.
+- The default local model is `minishlab/potion-multilingual-128M`.
+- First use of `model2vec` or `onnx` may download model assets.
 - If `config.toml` is missing, `mempal` still works with defaults.
 - The benchmark and search commands use whatever embedder backend is configured here.
 
@@ -254,6 +265,8 @@ mempal compress "张三推荐Clerk替换Auth0，因为价格更优"
 ```
 
 Chinese entities and topics are extracted with `jieba-rs` POS tagging. People, places, organizations, and content words are turned into entity/topic fields before AAAK formatting.
+
+This section is about AAAK output formatting, not retrieval quality. Chinese AAAK support is currently stronger than Chinese search quality.
 
 For the full format specification, see [`docs/aaak-dialect.md`](aaak-dialect.md).
 
@@ -520,7 +533,7 @@ What it does not do:
 - it is not the same as the official answer-generation evaluation pipeline
 - `raw` mode does not automatically mean zero API cost if your embedder backend is configured as `api`
 
-For the current local benchmark snapshot in this repository, see [`benchmarks/longmemeval_s_summary.md`](../benchmarks/longmemeval_s_summary.md).
+For the current local benchmark snapshot in this repository, see [`benchmarks/longmemeval_s_summary.md`](../benchmarks/longmemeval_s_summary.md). That summary now separates the older 384d baseline from the newer model2vec 256d run.
 
 ## Recommended: Auto-Remind After Commit
 
@@ -575,6 +588,37 @@ The difference: a future agent reading the good version knows what was omitted, 
 - **Cursor**: Add to `.cursorrules` — same instruction
 - **Any MCP client**: The MEMORY_PROTOCOL in `mempal_status` already contains Rule 4; the hook is a reinforcement for clients that sometimes skip it
 
+## Auto-Dream Integration
+
+Claude Code's auto-dream feature consolidates session memory while you're away — like REM sleep for AI. mempal integrates with this process to ensure project decisions survive across sessions.
+
+### How it works
+
+When auto-dream runs (automatically between sessions or manually via "dream"):
+
+1. Claude reviews recent session transcripts
+2. Extracts key decisions and knowledge
+3. **With mempal**: verifies facts via `mempal_search`, saves consolidated insights via `mempal_ingest` with importance >= 3, and records a dream diary entry
+
+### Setup
+
+Add to your project's `CLAUDE.md`:
+
+```markdown
+## Auto-Dream Integration
+
+When performing auto-dream or manual dream:
+1. Call mempal_search to verify facts being consolidated
+2. Save high-value insights to mempal (mempal_ingest, importance >= 3)
+3. If MEMORY.md and mempal contradict, trust mempal (has citations)
+4. Write dream summary as agent diary (wing="agent-diary", room="claude")
+5. Check triples for expired relationships to invalidate
+```
+
+### What this gives you
+
+Without mempal, auto-dream consolidates into MEMORY.md files that only Claude Code reads. With mempal, dream insights are stored in `palace.db` where **any** MCP-connected agent (Codex, Cursor, etc.) can find them. Dream becomes a cross-agent memory consolidation mechanism, not just a Claude Code internal process.
+
 ## Identity File
 
 If you use `wake-up` regularly with AI agents, you can add a user-edited identity file:
@@ -605,7 +649,7 @@ Working style: small reversible edits, verify before asserting.
 
 ### Search returns irrelevant results for Chinese (or other non-English) queries
 
-The default embedding model (MiniLM-L6-v2) is English-centric. Non-English queries produce low-quality vectors and often match the wrong drawers entirely.
+The default embedder is now a multilingual `model2vec` model, but English queries still retrieve more reliably than Chinese (and other non-English) queries in practice.
 
 **For AI agents**: MEMORY_PROTOCOL rule 3a tells agents to translate queries to English before calling `mempal_search`. This is handled automatically by agents that read the protocol.
 
@@ -619,7 +663,13 @@ mempal search "它不再是一个高级原型"
 mempal search "no longer just an advanced prototype"
 ```
 
-This is a limitation of the embedding model, not the search engine. Switching to a multilingual model (e.g., multilingual-e5, BGE-M3) would fix this at the vector level but requires re-embedding all existing drawers.
+This is mostly a retrieval-stack limitation, not a storage limitation:
+
+- the embedder is multilingual but still stronger on English queries
+- the search path does not currently use a Chinese-specific lexical tokenizer for FTS5
+- AAAK uses `jieba-rs`, but the search path does not
+
+So the practical guidance is still: translate the query to English first, or narrow scope with `--wing` / `--room`.
 
 ### Why did ingest store relative paths instead of absolute ones?
 
