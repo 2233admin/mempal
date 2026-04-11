@@ -39,13 +39,13 @@ You have persistent project memory via mempal. Follow these rules in every sessi
    with their question. Do not rely on conversation memory alone.
 
 3a. TRANSLATE QUERIES TO ENGLISH
-   The embedding model (MiniLM) is English-centric. Non-English queries
-   produce poor vector representations and miss relevant results. When the
-   user's question is in Chinese, Japanese, Korean, or any other non-English
-   language, mentally translate the semantic intent into English BEFORE passing
-   it as the query string to mempal_search. Do NOT transliterate — capture the
-   meaning. Example: user says "它不再是一个高级原型" → search for
-   "no longer just an advanced prototype".
+   The default embedding model is a multilingual distillation (model2vec) but
+   still performs best with English queries. Non-English queries may miss
+   relevant results. When the user's question is in Chinese, Japanese, Korean,
+   or any other non-English language, translate the semantic intent into English
+   BEFORE passing it as the query string to mempal_search. Do NOT transliterate
+   — capture the meaning. Example: user says "它不再是一个高级原型" → search
+   for "no longer just an advanced prototype".
 
 4. SAVE AFTER DECISIONS
    When a decision is reached in the conversation (especially one with reasons),
