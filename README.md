@@ -42,7 +42,7 @@ db_path = "~/.mempal/palace.db"
 
 [embed]
 backend = "model2vec"                          # default, zero native deps
-# model = "minishlab/potion-multilingual-128M" # default multilingual model
+# model = "minishlab/potion-multilingual-128M" # default multilingual model (1024d)
 ```
 
 Other backends:
@@ -131,6 +131,18 @@ mempal kg stats
 
 Triples support temporal validity — relationships can be invalidated when they expire.
 
+## Agent Diary
+
+Cross-session behavioral learning — agents record observations, lessons, and patterns:
+
+```bash
+# Search diary entries
+mempal search "lesson" --wing agent-diary
+mempal search "pattern" --wing agent-diary --room claude
+```
+
+Diary entries use the existing `mempal_ingest` tool with `wing="agent-diary"` and `room=agent-name`. MEMORY_PROTOCOL Rule 5a teaches agents to write diary entries. Integrates with Claude Code's auto-dream for automatic memory consolidation.
+
 ## Ingest Formats (5)
 
 | Format | Auto-detected by |
@@ -196,4 +208,4 @@ mempal reindex
 - AAAK dialect: [`docs/aaak-dialect.md`](docs/aaak-dialect.md)
 - Specs: [`specs/`](specs)
 - Plans: [`docs/plans/`](docs/plans)
-- Benchmark: [`benchmarks/longmemeval_s_summary.md`](benchmarks/longmemeval_s_summary.md)
+- Benchmark: [`benchmarks/longmemeval_s_summary.md`](benchmarks/longmemeval_s_summary.md) — includes the older 384d baseline and the newer model2vec 256d run

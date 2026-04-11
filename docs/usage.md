@@ -309,6 +309,46 @@ The command reports:
 
 Schema version is backed by SQLite `PRAGMA user_version`. On open, `mempal` applies bundled forward migrations needed to bring an older local database up to the current binary's schema.
 
+### Agent Diary
+
+mempal supports cross-session behavioral learning through a diary convention. Agents (or humans) record observations, lessons, and patterns that future sessions can learn from.
+
+The diary uses existing tools — no special commands needed:
+
+```bash
+# Write a diary entry (via MCP or by asking your AI agent)
+# Convention: wing="agent-diary", room=agent-name
+# Prefix content with OBSERVATION:, LESSON:, or PATTERN:
+
+# Search diary entries
+mempal search "lesson" --wing agent-diary
+mempal search "pattern infrastructure" --wing agent-diary --room claude
+
+# Search all entries for a specific agent
+mempal search "observation" --wing agent-diary --room codex
+```
+
+Example diary entry (written by AI agent via MCP `mempal_ingest`):
+
+```json
+{
+  "content": "LESSON: always check repo docs before writing infrastructure code",
+  "wing": "agent-diary",
+  "room": "claude",
+  "importance": 4
+}
+```
+
+Content prefixes:
+
+| Prefix | Use for |
+|--------|---------|
+| `OBSERVATION:` | Factual behavioral observations |
+| `LESSON:` | Actionable takeaways from mistakes or successes |
+| `PATTERN:` | Recurring behavioral patterns across sessions |
+
+MEMORY_PROTOCOL Rule 5a tells AI agents to write diary entries after sessions. Human users can also write diary entries — use `room` to identify the author (e.g., `room="alex"`).
+
 ### Delete and Purge
 
 These are destructive operations. Use them carefully.
