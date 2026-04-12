@@ -28,7 +28,7 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 ### 项目级 Spec
 - `specs/project.spec.md` — 项目约束（edition、依赖、编码规范、架构不变量）
 
-### 已完成的 Spec（P0-P4）
+### 已完成的 Spec（P0-P6）
 
 | Spec | 状态 | 范围 |
 |------|------|------|
@@ -40,35 +40,34 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 | `specs/p2-mcp.spec.md` | 完成 | MCP 服务器（7 工具） |
 | `specs/p3-aaak.spec.md` | 完成 | AAAK 编解码（BNF + 往返验证） |
 | `specs/p4-rest-api.spec.md` | 完成 | REST API（feature-gated） |
+| `specs/p5-wake-up-importance.spec.md` | 完成 | L1 重要性排序 wake-up（schema v4） |
+| `specs/p5-kg-timeline-stats.spec.md` | 完成 | KG timeline + stats actions |
+| `specs/p5-semantic-dedup.spec.md` | 完成 | 语义去重检测（ingest warning） |
+| `specs/p5-agent-diary.spec.md` | 完成 | Agent 日记 convention（协议层） |
+| `specs/p5-format-support.spec.md` | 完成 | Slack DM + Codex CLI 格式支持 |
+| `specs/p6-cowork-peek-and-decide.spec.md` | 完成 | Claude↔Codex 协作：live session peek（`mempal_peek_partner`）+ Rule 8/9 |
 
-### 当前 Spec（P5 — MemPalace 借鉴改进）
+### 当前 Spec
 
-| Spec | 范围 | 优先级 | 估时 |
-|------|------|--------|------|
-| `specs/p5-wake-up-importance.spec.md` | L1 重要性排序 wake-up（schema v4） | P0 | 1d |
-| `specs/p5-kg-timeline-stats.spec.md` | KG timeline + stats actions | P1 | 0.5d |
-| `specs/p5-semantic-dedup.spec.md` | 语义去重检测（ingest warning） | P1 | 0.5d |
-| `specs/p5-agent-diary.spec.md` | Agent 日记 convention（协议层） | P2 | 0.5d |
-| `specs/p5-format-support.spec.md` | Slack DM + Codex CLI 格式支持 | P2 | 1d |
+（无，P6 已完成）
 
 ### 实现计划
 
 - `docs/plans/2026-04-08-p0-implementation.md` — P0 关键路径（已完成）
 - `docs/plans/2026-04-09-p1-p4-implementation.md` — P1-P4（已完成）
-- `docs/plans/2026-04-11-p5-implementation.md` — **P5 当前计划**（5 tasks, 3.5d）
-
-**开始 P5 实现时**：先读对应的 spec，再按 plan 的 Task 步骤执行。Task 1 必须先做（schema v4），然后 2+3 可并行，4+5 可并行。
+- `docs/plans/2026-04-11-p5-implementation.md` — P5（已完成）
+- `docs/plans/2026-04-13-p6-implementation.md` — P6（已完成）
 
 ### Spec 使用方式
 
 ```bash
-agent-spec parse specs/p5-wake-up-importance.spec.md
-agent-spec lint specs/p5-wake-up-importance.spec.md --min-score 0.7
+agent-spec parse specs/p6-cowork-peek-and-decide.spec.md
+agent-spec lint specs/p6-cowork-peek-and-decide.spec.md --min-score 0.7
 ```
 
 ## 关键架构约束
 
-- **存储**：SQLite + sqlite-vec，单文件 `~/.mempal/palace.db`，schema v3
+- **存储**：SQLite + sqlite-vec，单文件 `~/.mempal/palace.db`，schema v4
 - **嵌入**：model2vec-rs 默认（potion-multilingual-128M, 256d），可选 ort (ONNX) 通过 `onnx` feature flag
 - **搜索**：BM25 (FTS5) + 向量 + RRF 融合混合检索
 - **AAAK 是输出格式化器**：不被 ingest 或 search 依赖
@@ -76,9 +75,9 @@ agent-spec lint specs/p5-wake-up-importance.spec.md --min-score 0.7
 - **搜索结果强制带引用**：`SearchResult` 包含 `source_file`、`drawer_id`、`tunnel_hints`
 - **知识图谱**：triples 表已激活（手动 CRUD），支持时态验证
 - **隧道**：动态跨 Wing 链接发现，内联到搜索结果
-- **自描述协议**：MEMORY_PROTOCOL 嵌入 MCP ServerInfo.instructions，7 条规则
+- **自描述协议**：MEMORY_PROTOCOL 嵌入 MCP ServerInfo.instructions，9 条规则
 
-## MCP 工具（7 个）
+## MCP 工具（8 个）
 
 | 工具 | 作用 |
 |------|------|
@@ -89,12 +88,13 @@ agent-spec lint specs/p5-wake-up-importance.spec.md --min-score 0.7
 | `mempal_taxonomy` | Wing/Room 路由关键词管理 |
 | `mempal_kg` | 知识图谱三元组（add/query/invalidate） |
 | `mempal_tunnels` | 跨 Wing 链接发现 |
+| `mempal_peek_partner` | 读 partner agent 当前 session（live，不存储） |
 
 ## Workspace 结构
 
 ```
 crates/
-├── mempal-core/      # 数据模型 + SQLite schema v3 + taxonomy + triples
+├── mempal-core/      # 数据模型 + SQLite schema v4 + taxonomy + triples
 ├── mempal-ingest/    # 导入管道
 ├── mempal-search/    # 混合搜索（BM25+向量+RRF）+ 路由 + tunnel hints
 ├── mempal-embed/     # 嵌入层（model2vec 默认, ort 可选）

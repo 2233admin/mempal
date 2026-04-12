@@ -479,7 +479,7 @@ impl ServerHandler for MempalMcpServer {
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);
         }
-        std::future::ready(Ok(self.get_info().into()))
+        std::future::ready(Ok(self.get_info()))
     }
 }
 
