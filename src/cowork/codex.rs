@@ -51,11 +51,13 @@ pub fn find_latest_session_for_cwd(
 /// Scans `[UTC_today - 7, UTC_today + 1]` (9 date directories) to cover
 /// "last 7 local days" regardless of the user's timezone offset. Codex
 /// names session directories by the LOCAL wall-clock date, not UTC:
+///
 ///   * For **positive** offsets (e.g. Asia/Shanghai +08:00), during
 ///     early-morning hours the live session lives in `UTC_today + 1`.
 ///   * For **negative** offsets (e.g. America/Los_Angeles -08:00),
 ///     during late-evening hours the live session lives in `UTC_today - 1`,
 ///     so 7 local days back is `UTC_today - 7`.
+///
 /// The 9-day UTC window is the smallest that provably covers both cases
 /// without parsing timezone data. It replaces an earlier 7-day UTC window
 /// that silently missed live sessions in UTC+ timezones during the
