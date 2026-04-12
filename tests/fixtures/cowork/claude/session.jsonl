@@ -1,0 +1,5 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"fake-sess"}
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"Hello from user turn 1"},"uuid":"u1","timestamp":"2026-04-13T10:00:00Z","cwd":"/tmp/fake-project","sessionId":"fake-sess"}
+{"parentUuid":"u1","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello from assistant turn 1"}]},"uuid":"a1","timestamp":"2026-04-13T10:00:05Z","cwd":"/tmp/fake-project","sessionId":"fake-sess"}
+{"parentUuid":"a1","isSidechain":false,"type":"user","message":{"role":"user","content":"Second user message"},"uuid":"u2","timestamp":"2026-04-13T10:01:00Z","cwd":"/tmp/fake-project","sessionId":"fake-sess"}
+{"parentUuid":"u2","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Second assistant reply"}]},"uuid":"a2","timestamp":"2026-04-13T10:01:10Z","cwd":"/tmp/fake-project","sessionId":"fake-sess"}
