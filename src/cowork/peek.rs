@@ -236,7 +236,15 @@ pub(crate) fn parse_rfc3339(s: &str) -> Option<i64> {
         _ => return None,
     };
 
+    // Round-trip validation: days_from_civil happily normalizes impossible
+    // dates (e.g. Feb 31 → March 3 same year). Reject them by requiring
+    // the civil → days → civil round trip to land on the exact same tuple.
     let days = days_from_civil(year, month, day);
+    let (rt_year, rt_month, rt_day) = days_to_ymd(days);
+    if rt_year != year || rt_month != month || rt_day != day {
+        return None;
+    }
+
     let local_secs =
         days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
     Some(local_secs - offset_secs)
@@ -423,6 +431,27 @@ mod tests {
         let c = parse_rfc3339("2026-04-13T02:00:00Z").unwrap();
         assert_eq!(a, c);
         assert_eq!(b, c);
+    }
+
+    #[test]
+    fn rfc3339_rejects_impossible_calendar_dates() {
+        // Caught by Codex review round 2: the old parser only range-checked
+        // day in 1..=31, so impossible dates like Feb 31 were silently
+        // normalized by days_from_civil (Feb 31 → March 3 of the same year)
+        // instead of being rejected. Round-trip validation fixes this.
+
+        // Non-leap-year dates that look valid positionally but aren't:
+        assert!(parse_rfc3339("2026-02-31T00:00:00Z").is_none(), "Feb 31 is impossible");
+        assert!(parse_rfc3339("2025-04-31T00:00:00Z").is_none(), "April has 30 days");
+        assert!(parse_rfc3339("2025-06-31T00:00:00Z").is_none(), "June has 30 days");
+        assert!(parse_rfc3339("2025-02-29T00:00:00Z").is_none(), "2025 is not a leap year");
+        assert!(parse_rfc3339("1900-02-29T00:00:00Z").is_none(), "1900 is a century non-leap year");
+
+        // Valid dates must still parse:
+        assert!(parse_rfc3339("2024-02-29T00:00:00Z").is_some(), "2024 is a leap year");
+        assert!(parse_rfc3339("2000-02-29T00:00:00Z").is_some(), "2000 is a century leap year (div 400)");
+        assert!(parse_rfc3339("2025-04-30T00:00:00Z").is_some());
+        assert!(parse_rfc3339("2025-12-31T00:00:00Z").is_some());
     }
 
     #[test]
