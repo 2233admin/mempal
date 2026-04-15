@@ -77,3 +77,52 @@ async fn concurrent_drain_is_winner_takes_all_at_most_once() {
         vec!["concurrent-0", "concurrent-1", "concurrent-2"]
     );
 }
+
+#[tokio::test]
+async fn push_and_drain_have_no_palace_db_side_effects() {
+    use mempal::core::db::Database;
+
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("palace.db");
+
+    let db = Database::open(&db_path).expect("open db");
+    let drawers_before = db.drawer_count().expect("drawer count");
+    let triples_before = db.triple_count().expect("triple count");
+    let schema_before = db.schema_version().expect("schema version");
+    assert_eq!(schema_before, 4, "baseline palace.db should be schema v4");
+    drop(db);
+
+    let mempal_home = tmp.path().join("home");
+    let repo = setup_repo(&tmp, "proj");
+
+    for i in 0..3 {
+        push(
+            &mempal_home,
+            Tool::Claude,
+            Tool::Codex,
+            &repo,
+            format!("msg-{i}"),
+            "2026-04-15T03:00:00Z".into(),
+        )
+        .unwrap();
+    }
+    let _ = drain(&mempal_home, Tool::Codex, &repo).unwrap();
+    let _ = drain(&mempal_home, Tool::Codex, &repo).unwrap();
+
+    let db = Database::open(&db_path).expect("reopen db");
+    assert_eq!(
+        db.drawer_count().unwrap(),
+        drawers_before,
+        "drawer_count changed after push/drain"
+    );
+    assert_eq!(
+        db.triple_count().unwrap(),
+        triples_before,
+        "triple_count changed after push/drain"
+    );
+    assert_eq!(
+        db.schema_version().unwrap(),
+        schema_before,
+        "schema_version changed after push/drain"
+    );
+}

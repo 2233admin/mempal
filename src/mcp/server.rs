@@ -18,10 +18,11 @@ use rmcp::{
 };
 
 use super::tools::{
-    DeleteRequest, DeleteResponse, DuplicateWarning, IngestRequest, IngestResponse, KgRequest,
-    KgResponse, KgStatsDto, PeekMessageDto, PeekPartnerRequest, PeekPartnerResponse, ScopeCount,
-    SearchRequest, SearchResponse, SearchResultDto, StatusResponse, TaxonomyEntryDto,
-    TaxonomyRequest, TaxonomyResponse, TripleDto, TunnelDto, TunnelsResponse,
+    CoworkPushRequest, CoworkPushResponse, DeleteRequest, DeleteResponse, DuplicateWarning,
+    IngestRequest, IngestResponse, KgRequest, KgResponse, KgStatsDto, PeekMessageDto,
+    PeekPartnerRequest, PeekPartnerResponse, ScopeCount, SearchRequest, SearchResponse,
+    SearchResultDto, StatusResponse, TaxonomyEntryDto, TaxonomyRequest, TaxonomyResponse,
+    TripleDto, TunnelDto, TunnelsResponse,
 };
 
 #[derive(Clone)]
@@ -450,6 +451,98 @@ impl MempalMcpServer {
             truncated: resp.truncated,
         }))
     }
+
+    #[tool(
+        name = "mempal_cowork_push",
+        description = "Proactively deliver a short handoff message to the PARTNER agent's inbox. \
+                       Partner reads it at their next UserPromptSubmit hook, NOT real-time. \
+                       Use for transient handoffs too important for mempal_peek_partner \
+                       and too ephemeral for mempal_ingest. Max 8 KB per message; total inbox \
+                       capped at 32 KB / 16 messages (InboxFull error means partner must drain). \
+                       Pass target_tool=\"claude\"/\"codex\" explicitly, or omit to infer partner \
+                       from MCP client identity. Self-push is rejected."
+    )]
+    async fn mempal_cowork_push(
+        &self,
+        Parameters(request): Parameters<CoworkPushRequest>,
+    ) -> std::result::Result<Json<CoworkPushResponse>, ErrorData> {
+        let caller_name = self
+            .client_name
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+        let caller_tool = caller_name
+            .as_deref()
+            .and_then(Tool::from_str_ci)
+            .ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "cannot infer caller tool from MCP client info (client_name missing or unrecognized)",
+                    None,
+                )
+            })?;
+
+        let target = match request.target_tool.as_deref() {
+            Some(name) => Tool::from_str_ci(name).ok_or_else(|| {
+                ErrorData::invalid_params(
+                    format!("unknown target_tool `{name}`: expected claude|codex"),
+                    None,
+                )
+            })?,
+            None => caller_tool.partner().ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "caller tool has no partner (tool=auto or unknown)",
+                    None,
+                )
+            })?,
+        };
+
+        let mempal_home = crate::cowork::inbox::mempal_home();
+        let cwd = PathBuf::from(&request.cwd);
+        let pushed_at = current_rfc3339();
+
+        let (path, size) = crate::cowork::inbox::push(
+            &mempal_home,
+            caller_tool,
+            target,
+            &cwd,
+            request.content,
+            pushed_at.clone(),
+        )
+        .map_err(|e| match e {
+            crate::cowork::inbox::InboxError::SelfPush(_)
+            | crate::cowork::inbox::InboxError::MessageTooLarge(_)
+            | crate::cowork::inbox::InboxError::InvalidCwd(_)
+            | crate::cowork::inbox::InboxError::InboxFull { .. } => {
+                ErrorData::invalid_params(e.to_string(), None)
+            }
+            _ => ErrorData::internal_error(e.to_string(), None),
+        })?;
+
+        Ok(Json(CoworkPushResponse {
+            target_tool: target.dir_name().to_string(),
+            inbox_path: path.to_string_lossy().to_string(),
+            pushed_at,
+            inbox_size_after: size,
+        }))
+    }
+}
+
+/// Return the current UTC timestamp in RFC 3339 format (seconds precision).
+/// Matches the format used by P6 peek_partner messages.
+fn current_rfc3339() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // Use the same days_to_ymd+format_rfc3339 helpers as cowork::peek,
+    // but we don't need to pull them in — format as a simple UTC timestamp.
+    // Use the existing format_rfc3339 via SystemTime conversion.
+    let secs = now;
+    // Reuse cowork::peek::format_rfc3339 is pub; call it to stay consistent.
+    crate::cowork::peek::format_rfc3339(
+        UNIX_EPOCH + std::time::Duration::from_secs(secs as u64),
+    )
 }
 
 #[tool_handler(router = self.tool_router)]

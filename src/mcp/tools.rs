@@ -251,6 +251,32 @@ impl From<crate::cowork::PeekMessage> for PeekMessageDto {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct CoworkPushRequest {
+    /// The message content to deliver. Maximum 8 KB. Short status updates,
+    /// decision summaries, or drawer_id pointers. Do NOT push search results
+    /// or large reasoning blocks — see Rule 10 in MEMORY_PROTOCOL.
+    pub content: String,
+
+    /// Target agent: "claude" or "codex". OMIT to infer partner from MCP
+    /// client identity (Claude → Codex, Codex → Claude). Self-push is rejected.
+    #[serde(default)]
+    pub target_tool: Option<String>,
+
+    /// Absolute filesystem path of the project cwd this push is scoped to.
+    /// Internally normalized to git repo root via `project_identity()` so
+    /// subdirectory callers land on the same inbox as repo-root callers.
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct CoworkPushResponse {
+    pub target_tool: String,
+    pub inbox_path: String,
+    pub pushed_at: String,
+    pub inbox_size_after: u64,
+}
+
 impl SearchResultDto {
     pub fn with_signals_from_result(value: SearchResult) -> Self {
         let signals = crate::aaak::analyze(&value.content);
