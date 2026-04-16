@@ -95,6 +95,24 @@ agent-spec lint specs/p6-cowork-peek-and-decide.spec.md --min-score 0.7
 | `mempal_peek_partner` | 读 partner agent 当前 session（live，不存储） |
 | `mempal_cowork_push` | 主动投递 ephemeral handoff 到 partner inbox（at-next-submit 交付） |
 
+## mempal 检索纪律
+
+当 agent 回答本项目的历史决策、实现细节、bug 成因、架构理由、或“为什么/怎么工作”类问题时：
+
+1. 每个 session 先调一次 `mempal_status`，再决定是否使用 `wing` / `room` filter。
+2. 对项目事实优先使用 `mempal_search`，不要只靠 repo grep、当前对话记忆或常识猜测。
+3. 在本仓库内，只要 `mempal_status` 已确认存在 `wing="mempal"`，默认先用 `wing="mempal"` 缩小范围；只有用户明确要求跨项目 / 全局搜索时才放宽。
+4. 历史决策、设计理由、bug 成因这类问题，第一轮检索默认使用简短英文语义 query，且 `top_k=2`；只有证据不足时才逐步放大到 `top_k=3-4` 或放宽 query。
+5. 如果 MCP 客户端提示 Large response / Large MCP response，优先重试更窄的 query、加 `wing` / `room`、或降低 `top_k`；不要直接消费一大段 raw `content`。
+6. 显式消费 `mempal_search` 返回的结构化 signals，而不是只读 `content`：
+   - 决策问题：优先 `flags` 包含 `DECISION` 的结果
+   - 实现 / bug / 架构问题：优先 `flags` 包含 `TECHNICAL` 的结果
+   - 同等条件下优先处理 `importance_stars` 更高的结果
+   - 用 `entities` 和 `topics` 缩小歧义结果集
+7. 将 `content` 视为 raw text；不要期待或解析 `mempal_search` 返回 AAAK 格式文本。
+8. 基于 mempal 结果作答时，必须引用 `drawer_id` 和 `source_file`。
+9. 如果没有找到高信号结果，要明确说明“没找到足够证据”，然后扩大查询范围；不要猜。
+
 ## Workspace 结构
 
 ```
@@ -104,7 +122,7 @@ crates/
 ├── mempal-search/    # 混合搜索（BM25+向量+RRF）+ 路由 + tunnel hints
 ├── mempal-embed/     # 嵌入层（model2vec 默认, ort 可选）
 ├── mempal-aaak/      # AAAK 编解码（输出侧）
-├── mempal-mcp/       # MCP 服务器（7 工具）
+├── mempal-mcp/       # MCP 服务器（9 工具）
 ├── mempal-api/       # REST API（feature-gated）
 └── mempal-cli/       # CLI 入口（含 reindex, kg, tunnels）
 ```
@@ -129,3 +147,13 @@ crates/
 5. **清理 KG**：检查 triples 中是否有过期关系需要 invalidate
 
 Dream 是 mempal 的"REM 睡眠"——短期 session 记忆被整理为长期项目记忆。
+
+## Known Limitations / Operational Notes
+
+以下是 0.3.0 已知、来自真实 E2E 的跨系统约束，和 mempal 代码无关但会直接影响使用体验，记录在此避免重复踩坑：
+
+1. **`mempal cowork-install-hooks` 写两件 Claude 侧制品**：`.claude/hooks/user-prompt-submit.sh`（脚本）+ `.claude/settings.json` 下的 `hooks.UserPromptSubmit` 条目（注册）。Claude Code 不按文件名约定自动发现脚本，两件**都必须有**hook 才会 fire。`install-hooks` 已自动处理 + 自愈 stale 条目；请勿手工移除其中任一。
+2. **Codex 侧依赖 `codex_hooks` feature flag**：shipped `codex-cli ≤ 0.120.0` 该 flag 处于 "under development" 且默认 `false`，此时 Codex runtime 完全忽略 `~/.codex/hooks.json`。`install-hooks` 检测到会打印 warning + 激活命令 `codex features enable codex_hooks`。
+3. **Codex TUI 进程启动时一次性缓存 config**：改完 `config.toml` 或 `hooks.json`（含 feature flag / install-hooks）后，必须完全退出并重启 Codex TUI；已在跑的进程拿不到新配置。
+4. **Claude Code 的 MCP server 是 session startup spawn**：`cargo install` 升级 mempal binary 后，Claude Code 还在用旧 MCP server 进程，**不认识新加的工具**（如 `mempal_cowork_push`）。升级后重启 Claude Code，MCP server 会 respawn 到新 binary。
+5. **`mempal_cowork_push` 仅支持 `claude-code` / `codex` 身份的 MCP 客户端**（`src/mcp/server.rs:469-478`）：caller_tool 推断基于 MCP `ClientInfo.name`，是 self-push 拒绝和 `InboxMessage.from` 填写的前提。Generic MCP client（名字不在识别列表里）即使显式传 `target_tool` 也会被拒。这是 Claude↔Codex pair 的 by-design scope。

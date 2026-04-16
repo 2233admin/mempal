@@ -15,7 +15,7 @@ Rust 实现的 coding agent 项目记忆工具。单二进制，`cargo install m
 mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、AAAK 压缩），用 Rust 从零实现并修复其缺陷。以下两个本地项目是关键参考：
 
 - **MemPalace 源码**：`/Users/zhangalex/Work/Projects/AI/mempalace` — Python 原版实现，查看 `mempalace/` 目录下的 searcher.py、palace_graph.py、dialect.py、knowledge_graph.py 等模块了解原始设计
-- **MemPalace 书稿**：`/Users/zhangalex/Work/Projects/AI/mempalace-book` — 基于源码的设计分析书，`book/src/` 下 25 章 + 4 个附录，包含架构评估、AAAK 完整度分析、benchmark 诚实性审查等深度内容
+- **MemPalace 书稿**：`/Users/zhangalex/Work/Projects/AI/mempalace-book` — 基于源码的设计分析书，`book/src/` 下 30 章（含 Part 10 mempal Rust 重铸）+ 4 个附录
 
 实现时遇到设计疑问，优先查阅书稿中的分析（特别是附录 C 的 AAAK 评估和附录 A/B 的 E2E Trace），而非直接复制 Python 代码。
 
@@ -30,83 +30,104 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 ### 项目级 Spec
 - `specs/project.spec.md` — 项目约束（edition、依赖、编码规范、架构不变量）
 
-### 任务 Spec（按优先级）
+### 已完成的 Spec（P0-P8）
 
-| Spec | 范围 | 依赖 | 估时 |
-|------|------|------|------|
-| `specs/p0-core-scaffold.spec.md` | workspace 骨架 + SQLite schema | 无 | 1d |
-| `specs/p0-embed-trait.spec.md` | Embedder trait + ONNX 实现 | core | 1d |
-| `specs/p0-ingest.spec.md` | 导入管道（格式检测/归一化/分块/存储） | core + embed | 2d |
-| `specs/p0-search-cli.spec.md` | 搜索引擎 + CLI（init/ingest/search） | core + embed + ingest | 2d |
-| `specs/p1-routing-citation.spec.md` | 查询路由 + 引用组装 + wake-up | search-cli | 1d |
-| `specs/p2-mcp.spec.md` | MCP 服务器（4 工具） | routing | 1d |
-| `specs/p3-aaak.spec.md` | AAAK 编解码（BNF + 往返验证） | core（独立） | 2d |
-| `specs/p4-rest-api.spec.md` | REST API（feature-gated） | routing | 1d |
+| Spec | 状态 | 范围 |
+|------|------|------|
+| `specs/p0-core-scaffold.spec.md` | 完成 | workspace 骨架 + SQLite schema |
+| `specs/p0-embed-trait.spec.md` | 完成 | Embedder trait（model2vec 默认 + ort 可选） |
+| `specs/p0-ingest.spec.md` | 完成 | 导入管道（格式检测/归一化/分块/存储） |
+| `specs/p0-search-cli.spec.md` | 完成 | 搜索引擎 + CLI |
+| `specs/p1-routing-citation.spec.md` | 完成 | 查询路由 + 引用组装 |
+| `specs/p2-mcp.spec.md` | 完成 | MCP 服务器（7 工具） |
+| `specs/p3-aaak.spec.md` | 完成 | AAAK 编解码(BNF + 往返验证) |
+| `specs/p4-rest-api.spec.md` | 完成 | REST API（feature-gated） |
+| `specs/p5-wake-up-importance.spec.md` | 完成 | L1 重要性排序 wake-up（schema v4） |
+| `specs/p5-kg-timeline-stats.spec.md` | 完成 | KG timeline + stats actions |
+| `specs/p5-semantic-dedup.spec.md` | 完成 | 语义去重检测（ingest warning） |
+| `specs/p5-agent-diary.spec.md` | 完成 | Agent 日记 convention（协议层） |
+| `specs/p5-format-support.spec.md` | 完成 | Slack DM + Codex CLI 格式支持 |
+| `specs/p6-cowork-peek-and-decide.spec.md` | 完成 | Claude↔Codex 协作：live session peek（`mempal_peek_partner`）+ Rule 8/9 |
+| `specs/p7-search-structured-signals.spec.md` | 完成 | `mempal_search` 响应每条结果附带 5 个 AAAK-derived 结构化字段（`entities` / `topics` / `flags` / `emotions` / `importance_stars`），`content` 保持 raw |
+| `specs/p8-cowork-inbox-push.spec.md` | 完成 | 双向 cowork push — `mempal_cowork_push` MCP 工具 + `cowork-drain` / `cowork-status` / `cowork-install-hooks` CLI + 对称 UserPromptSubmit hook 注入（at-next-submit 交付） |
 
-### 关键路径
+### 当前 Spec
 
-```
-core(1d) → embed(1d) → ingest(2d) → search-cli(2d) → routing(1d) → mcp(1d)
-                                                                    → rest(1d)
-core(1d) → aaak(2d)  ← 可并行
-```
+（无，P8 已完成）
+
+### 实现计划
+
+- `docs/plans/2026-04-08-p0-implementation.md` — P0 关键路径（已完成）
+- `docs/plans/2026-04-09-p1-p4-implementation.md` — P1-P4（已完成）
+- `docs/plans/2026-04-11-p5-implementation.md` — P5（已完成）
+- `docs/plans/2026-04-13-p6-implementation.md` — P6（已完成）
+- `docs/plans/2026-04-13-p7-implementation.md` — P7（已完成）
+- `docs/plans/2026-04-15-p8-implementation.md` — P8（已完成）
 
 ### Spec 使用方式
 
 ```bash
-# 查看任务合约
-agent-spec parse specs/p0-core-scaffold.spec.md
-
-# 验证质量
-agent-spec lint specs/p0-core-scaffold.spec.md --min-score 0.7
-
-# 开始实现前：读 spec → 理解 intent/decisions/boundaries → 按 scenarios 验收
+agent-spec parse specs/p6-cowork-peek-and-decide.spec.md
+agent-spec lint specs/p6-cowork-peek-and-decide.spec.md --min-score 0.7
 ```
-
-## 实现计划
-
-`docs/plans/2026-04-08-p0-implementation.md` — P0 关键路径的完整实现计划（10 个 Task，TDD 流程）。
-
-每个 Task 包含：写失败测试 → 验证失败 → 实现 → 验证通过 → 提交。按顺序执行：
-
-1. Workspace scaffold + stub crates
-2. Core data types
-3. SQLite Database + schema
-4. Config loading
-5. Embedder trait + ONNX
-6. Ingest — format detection + chunking
-7. Ingest — full pipeline with storage
-8. Search engine
-9. CLI — init, ingest, search, status
-10. Integration + cleanup
-
-开始实现时：**先读对应的 spec（`specs/p0-*.spec.md`），再按 plan 的 Task 步骤执行。**
 
 ## 关键架构约束
 
-- **存储**：SQLite + sqlite-vec，单文件 `~/.mempal/palace.db`
-- **嵌入**：ONNX 默认（MiniLM），可选外部 API，通过 `Embedder` trait 抽象
-- **AAAK 是输出格式化器**：不被 ingest 或 search 依赖，只在 CLI/MCP 输出侧可选调用
-- **数据永远 raw 存储**：drawers 表存原文，向量索引在 drawer_vectors 表
-- **搜索结果强制带引用**：每个 `SearchResult` 必须包含 `source_file` 和 `drawer_id`
+- **存储**：SQLite + sqlite-vec，单文件 `~/.mempal/palace.db`，schema v4
+- **嵌入**：model2vec-rs 默认（potion-multilingual-128M, 256d），可选 ort (ONNX) 通过 `onnx` feature flag
+- **搜索**：BM25 (FTS5) + 向量 + RRF 融合混合检索
+- **AAAK 是输出格式化器**：不被 ingest 或 search 依赖
+- **数据永远 raw 存储**：drawers 表存原文，向量索引在 drawer_vectors 表（维度动态）
+- **搜索结果强制带引用**：`SearchResult` 包含 `source_file`、`drawer_id`、`tunnel_hints`
+- **知识图谱**：triples 表已激活（手动 CRUD），支持时态验证
+- **隧道**：动态跨 Wing 链接发现，内联到搜索结果
+- **自描述协议**：MEMORY_PROTOCOL 嵌入 MCP ServerInfo.instructions，10 条规则
+
+## MCP 工具（9 个）
+
+| 工具 | 作用 |
+|------|------|
+| `mempal_status` | 状态 + 协议 + AAAK spec |
+| `mempal_search` | 混合检索（BM25 + 向量 + RRF + tunnel hints）+ AAAK 结构化 signals（P7） |
+| `mempal_ingest` | 写记忆（支持 dry_run） |
+| `mempal_delete` | soft-delete（+ audit） |
+| `mempal_taxonomy` | Wing/Room 路由关键词管理 |
+| `mempal_kg` | 知识图谱三元组（add/query/invalidate） |
+| `mempal_tunnels` | 跨 Wing 链接发现 |
+| `mempal_peek_partner` | 读 partner agent 当前 session（live，不存储） |
+| `mempal_cowork_push` | 主动投递 ephemeral handoff 到 partner inbox（at-next-submit 交付） |
+
+## mempal 检索纪律
+
+当 agent 回答本项目的历史决策、实现细节、bug 成因、架构理由、或"为什么/怎么工作"类问题时：
+
+1. 每个 session 先调一次 `mempal_status`，再决定是否使用 `wing` / `room` filter。
+2. 对项目事实优先使用 `mempal_search`，不要只靠 repo grep、当前对话记忆或常识猜测。
+3. 在本仓库内，只要 `mempal_status` 已确认存在 `wing="mempal"`，默认先用 `wing="mempal"` 缩小范围；只有用户明确要求跨项目 / 全局搜索时才放宽。
+4. 历史决策、设计理由、bug 成因这类问题，第一轮检索默认使用简短英文语义 query，且 `top_k=2`；只有证据不足时才逐步放大到 `top_k=3-4` 或放宽 query。
+5. 如果 MCP 客户端提示 Large response / Large MCP response，优先重试更窄的 query、加 `wing` / `room`、或降低 `top_k`；不要直接消费一大段 raw `content`。
+6. 显式消费 `mempal_search` 返回的结构化 signals，而不是只读 `content`：
+   - 决策问题：优先 `flags` 包含 `DECISION` 的结果
+   - 实现 / bug / 架构问题：优先 `flags` 包含 `TECHNICAL` 的结果
+   - 同等条件下优先处理 `importance_stars` 更高的结果
+   - 用 `entities` 和 `topics` 缩小歧义结果集
+7. 将 `content` 视为 raw text；不要期待或解析 `mempal_search` 返回 AAAK 格式文本。
+8. 基于 mempal 结果作答时，必须引用 `drawer_id` 和 `source_file`。
+9. 如果没有找到高信号结果，要明确说明"没找到足够证据"，然后扩大查询范围；不要猜。
 
 ## Workspace 结构
 
 ```
 crates/
-├── mempal-core/      # 数据模型 + SQLite schema + taxonomy
+├── mempal-core/      # 数据模型 + SQLite schema v4 + taxonomy + triples
 ├── mempal-ingest/    # 导入管道
-├── mempal-search/    # 搜索 + 路由
-├── mempal-embed/     # 嵌入层（trait 抽象）
-├── mempal-aaak/      # AAAK 编解码（输出侧，不被 ingest/search 依赖）
-├── mempal-mcp/       # MCP 服务器
+├── mempal-search/    # 混合搜索（BM25+向量+RRF）+ 路由 + tunnel hints
+├── mempal-embed/     # 嵌入层（model2vec 默认, ort 可选）
+├── mempal-aaak/      # AAAK 编解码（输出侧）
+├── mempal-mcp/       # MCP 服务器（9 工具）
 ├── mempal-api/       # REST API（feature-gated）
-└── mempal-cli/       # CLI 入口
+└── mempal-cli/       # CLI 入口（含 reindex, kg, tunnels）
 ```
-
-## 实现优先级
-
-P0: core + embed + cli (init/ingest/search) → P1: search 路由+引用 → P2: mcp → P3: aaak → P4: api
 
 ## 代码规范
 
@@ -115,3 +136,26 @@ P0: core + embed + cli (init/ingest/search) → P1: search 路由+引用 → P2:
 - 错误处理：`anyhow`（应用层）+ `thiserror`（库层）
 - 异步：`tokio`，features=["full"]
 - 不用 `.unwrap()`，用 `?` 或 `.expect("reason")`
+- 每次 commit 后：调 `mempal_ingest` 存决策记忆（Rule 4）
+
+## Auto-Dream 集成
+
+当 Claude Code 执行 auto-dream 或手动 dream 时：
+
+1. **验证**：调 `mempal_search` 核实正在整理的事实是否与 mempal 记忆一致
+2. **保存**：将整理后的高价值洞察存到 mempal（`mempal_ingest`，importance >= 3）
+3. **解矛盾**：MEMORY.md 与 mempal drawer 矛盾时，以 mempal 为准（mempal 有出处引用）
+4. **写日记**：将 dream 摘要存为 agent diary（`wing="agent-diary"`, `room="claude"`）
+5. **清理 KG**：检查 triples 中是否有过期关系需要 invalidate
+
+Dream 是 mempal 的"REM 睡眠"——短期 session 记忆被整理为长期项目记忆。
+
+## Known Limitations / Operational Notes
+
+以下是 0.3.0 已知、来自真实 E2E 的跨系统约束，和 mempal 代码无关但会直接影响使用体验，记录在此避免重复踩坑：
+
+1. **`mempal cowork-install-hooks` 写两件 Claude 侧制品**：`.claude/hooks/user-prompt-submit.sh`（脚本）+ `.claude/settings.json` 下的 `hooks.UserPromptSubmit` 条目（注册）。Claude Code 不按文件名约定自动发现脚本，两件**都必须有**hook 才会 fire。`install-hooks` 已自动处理 + 自愈 stale 条目；请勿手工移除其中任一。
+2. **Codex 侧依赖 `codex_hooks` feature flag**：shipped `codex-cli ≤ 0.120.0` 该 flag 处于 "under development" 且默认 `false`，此时 Codex runtime 完全忽略 `~/.codex/hooks.json`。`install-hooks` 检测到会打印 warning + 激活命令 `codex features enable codex_hooks`。
+3. **Codex TUI 进程启动时一次性缓存 config**：改完 `config.toml` 或 `hooks.json`（含 feature flag / install-hooks）后，必须完全退出并重启 Codex TUI；已在跑的进程拿不到新配置。
+4. **Claude Code 的 MCP server 是 session startup spawn**：`cargo install` 升级 mempal binary 后，Claude Code 还在用旧 MCP server 进程，**不认识新加的工具**（如 `mempal_cowork_push`）。升级后重启 Claude Code，MCP server 会 respawn 到新 binary。
+5. **`mempal_cowork_push` 仅支持 `claude-code` / `codex` 身份的 MCP 客户端**（`src/mcp/server.rs:469-478`）：caller_tool 推断基于 MCP `ClientInfo.name`，是 self-push 拒绝和 `InboxMessage.from` 填写的前提。Generic MCP client（名字不在识别列表里）即使显式传 `target_tool` 也会被拒。这是 Claude↔Codex pair 的 by-design scope。

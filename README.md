@@ -79,23 +79,28 @@ api_model = "nomic-embed-text"
 | `mempal reindex` | Re-embed all drawers after model change |
 | `mempal status` | DB stats, schema version, scopes |
 | `mempal serve [--mcp]` | MCP server (+ REST with feature) |
+| `mempal cowork-install-hooks [--global-codex]` | Install UserPromptSubmit hooks for Claude Code (+ optional Codex merge) |
+| `mempal cowork-drain --target <claude\|codex>` | Drain inbox messages (for hook use; exits 0 on any failure) |
+| `mempal cowork-status --cwd <PATH>` | Read-only view of both inboxes at `<PATH>` |
 | `mempal bench longmemeval <FILE>` | LongMemEval retrieval benchmark |
 
-## MCP Server (7 tools)
+## MCP Server (9 tools)
 
 `mempal serve --mcp` exposes these tools via Model Context Protocol:
 
 | Tool | Purpose |
 |------|---------|
 | `mempal_status` | State + protocol + AAAK spec (teaches agent on first call) |
-| `mempal_search` | Hybrid search with tunnel hints and citations |
+| `mempal_search` | Hybrid search with tunnel hints, citations, and AAAK-derived structured signals |
 | `mempal_ingest` | Store memories with optional importance (0-5) and dry_run |
 | `mempal_delete` | Soft-delete with audit trail |
 | `mempal_taxonomy` | List or edit routing keywords |
 | `mempal_kg` | Knowledge graph: add/query/invalidate/timeline/stats |
 | `mempal_tunnels` | Cross-wing room discovery |
+| `mempal_peek_partner` | Read partner agent's live session (Claude ↔ Codex), pure read, never writes |
+| `mempal_cowork_push` | Send a short handoff message to partner agent's inbox (at-next-submit delivery) |
 
-The server embeds MEMORY_PROTOCOL (9 behavioral rules) in the MCP `initialize.instructions` field. Any MCP client learns the workflow automatically.
+The server embeds MEMORY_PROTOCOL (10 behavioral rules) in the MCP `initialize.instructions` field. Any MCP client learns the workflow automatically.
 
 ## Memory Protocol
 
@@ -109,6 +114,42 @@ mempal teaches agents these rules through self-description:
 4. **SAVE AFTER DECISIONS** — persist rationale, not just outcomes
 5. **CITE EVERYTHING** — reference drawer_id and source_file
 5a. **KEEP A DIARY** — record behavioral observations in wing="agent-diary"
+8. **PARTNER AWARENESS** — use `mempal_peek_partner` for live partner-agent session, not crystallized drawers
+9. **DECISION CAPTURE** — `mempal_ingest` is for firm decisions only; include partner input when peek informed the call
+10. **COWORK PUSH** — use `mempal_cowork_push` as the SEND primitive in the SEND/READ/PERSIST triad; at-next-submit delivery, not real-time
+
+## Agent Cowork (P6 peek + P8 push)
+
+Two coding agents (Claude Code and Codex) can collaborate on the same repo through a per-project inbox + hook-driven injection channel, on top of `mempal_peek_partner` (read live partner session) and `mempal_cowork_push` (send ephemeral handoff).
+
+Install hooks once per repo (run at the repo root):
+
+```bash
+mempal cowork-install-hooks --global-codex
+```
+
+This writes:
+
+- `.claude/hooks/user-prompt-submit.sh` + merges a registration entry into `.claude/settings.json` so Claude Code fires the hook on every user prompt.
+- `~/.codex/hooks.json` UserPromptSubmit entry so Codex fires the same drain on every user prompt.
+
+The `--global-codex` part is optional. The re-run is idempotent and self-heals stale/wrong drain entries — re-installing after a mempal upgrade is always safe.
+
+Delivery is **at-next-UserPromptSubmit**, not real-time: a push from Claude to Codex becomes visible only when the Codex user submits their next prompt, at which point the hook drains the inbox and prepends the message as `additionalContext` on that turn.
+
+Check inbox state at any time without draining:
+
+```bash
+mempal cowork-status --cwd "$PWD"
+```
+
+### Known limitations
+
+- **Codex feature flag dependency**: Codex's hooks runtime is gated behind the `codex_hooks` feature flag (currently "under development" in shipped `codex-cli`). If the flag is off, Codex silently ignores `~/.codex/hooks.json`. `install-hooks` detects this and prints a warning with the activation command: `codex features enable codex_hooks`.
+- **Two Claude-side artifacts**: Claude Code does not auto-discover hook scripts by filename. Both `.claude/hooks/user-prompt-submit.sh` and the matching entry in `.claude/settings.json` are required. `install-hooks` writes both; do not remove either by hand.
+- **TUI restart needed after config changes on the Codex side**: Codex reads `config.toml` + `hooks.json` at process startup only. After enabling the feature flag or running `install-hooks`, fully quit and relaunch the Codex TUI before expecting hooks to fire.
+- **MCP server re-spawn**: Claude Code spawns the mempal MCP server at client startup. After upgrading the mempal binary (`cargo install ...`), restart Claude Code so the MCP server respawns and exposes newly added tools like `mempal_cowork_push`.
+- **Bidirectional scope**: `mempal_cowork_push` currently requires an MCP client identifying itself as `claude-code` or `codex` (or their aliases). Generic MCP clients cannot push because caller identity is required to fill the `from` field and enforce self-push rejection. This is by design for the Claude ↔ Codex pair.
 
 ## Search Architecture
 
@@ -174,7 +215,7 @@ Chinese text uses jieba-rs POS tagging for proper word segmentation.
 | `mempal-ingest` | Format detection, normalization, chunking (5 formats) |
 | `mempal-search` | Hybrid search (BM25 + vector + RRF), routing, tunnels |
 | `mempal-aaak` | AAAK encode/decode with BNF grammar + roundtrip tests |
-| `mempal-mcp` | MCP server (7 tools) |
+| `mempal-mcp` | MCP server (9 tools) |
 | `mempal-api` | Feature-gated REST API |
 | `mempal-cli` | CLI entrypoint |
 
