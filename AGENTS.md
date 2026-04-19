@@ -40,7 +40,7 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 | `specs/p0-search-cli.spec.md` | 完成 | 搜索引擎 + CLI |
 | `specs/p1-routing-citation.spec.md` | 完成 | 查询路由 + 引用组装 |
 | `specs/p2-mcp.spec.md` | 完成 | MCP 服务器（7 工具） |
-| `specs/p3-aaak.spec.md` | 完成 | AAAK 编解码(BNF + 往返验证) |
+| `specs/p3-aaak.spec.md` | 完成 | AAAK 编解码（BNF + 往返验证） |
 | `specs/p4-rest-api.spec.md` | 完成 | REST API（feature-gated） |
 | `specs/p5-wake-up-importance.spec.md` | 完成 | L1 重要性排序 wake-up（schema v4） |
 | `specs/p5-kg-timeline-stats.spec.md` | 完成 | KG timeline + stats actions |
@@ -50,10 +50,18 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 | `specs/p6-cowork-peek-and-decide.spec.md` | 完成 | Claude↔Codex 协作：live session peek（`mempal_peek_partner`）+ Rule 8/9 |
 | `specs/p7-search-structured-signals.spec.md` | 完成 | `mempal_search` 响应每条结果附带 5 个 AAAK-derived 结构化字段（`entities` / `topics` / `flags` / `emotions` / `importance_stars`），`content` 保持 raw |
 | `specs/p8-cowork-inbox-push.spec.md` | 完成 | 双向 cowork push — `mempal_cowork_push` MCP 工具 + `cowork-drain` / `cowork-status` / `cowork-install-hooks` CLI + 对称 UserPromptSubmit hook 注入（at-next-submit 交付） |
+| `specs/p9-fact-checker.spec.md` | 完成 | 离线事实核查 — `mempal_fact_check` MCP 工具 + `fact-check` CLI，基于 KG triples + 已知 entity 检测 SimilarNameConflict / RelationContradiction / StaleFact（协议 Rule 11） |
+| `specs/p9-ingest-lock.spec.md` | 完成 | Per-source `flock` 锁 — 消除 Claude↔Codex 并发 ingest 同一 source 的 TOCTOU race；`IngestStats` / `IngestResponse.lock_wait_ms` 提供并发等待可观测性 |
 
-### 当前 Spec
+### 当前 Spec（草稿，未实现）
 
-（无，P8 已完成）
+| Spec | 范围 |
+|------|------|
+| `specs/p10-explicit-tunnels.spec.md` | schema v5 + `mempal_tunnels` 扩 add/list/delete/follow 显式跨 wing 链接 |
+| `specs/p10-normalize-version.spec.md` | schema v6 `normalize_version` 列 + `reindex --stale` 机制 |
+| `specs/p11-diary-daily-rollup.spec.md` | `agent-diary` 天粒度 upsert drawer，防 chatty agent 爆炸 |
+| `specs/p11-chunk-neighbors.spec.md` | search 可选返回命中 chunk 前后邻居 |
+| `specs/p11-transcript-noise-strip.spec.md` | Claude JSONL / Codex rollout verbatim-safe 噪声剥离（依赖 P10 normalize-version） |
 
 ### 实现计划
 
@@ -63,6 +71,7 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 - `docs/plans/2026-04-13-p6-implementation.md` — P6（已完成）
 - `docs/plans/2026-04-13-p7-implementation.md` — P7（已完成）
 - `docs/plans/2026-04-15-p8-implementation.md` — P8（已完成）
+- `docs/plans/2026-04-17-p9-implementation.md` — P9 fact-checker + ingest-lock（已完成）
 
 ### Spec 使用方式
 
@@ -81,25 +90,26 @@ agent-spec lint specs/p6-cowork-peek-and-decide.spec.md --min-score 0.7
 - **搜索结果强制带引用**：`SearchResult` 包含 `source_file`、`drawer_id`、`tunnel_hints`
 - **知识图谱**：triples 表已激活（手动 CRUD），支持时态验证
 - **隧道**：动态跨 Wing 链接发现，内联到搜索结果
-- **自描述协议**：MEMORY_PROTOCOL 嵌入 MCP ServerInfo.instructions，10 条规则
+- **自描述协议**：MEMORY_PROTOCOL 嵌入 MCP ServerInfo.instructions，11 条规则
 
-## MCP 工具（9 个）
+## MCP 工具（10 个）
 
 | 工具 | 作用 |
 |------|------|
 | `mempal_status` | 状态 + 协议 + AAAK spec |
 | `mempal_search` | 混合检索（BM25 + 向量 + RRF + tunnel hints）+ AAAK 结构化 signals（P7） |
-| `mempal_ingest` | 写记忆（支持 dry_run） |
+| `mempal_ingest` | 写记忆（支持 dry_run；P9-B 暴露 `lock_wait_ms`） |
 | `mempal_delete` | soft-delete（+ audit） |
 | `mempal_taxonomy` | Wing/Room 路由关键词管理 |
 | `mempal_kg` | 知识图谱三元组（add/query/invalidate） |
 | `mempal_tunnels` | 跨 Wing 链接发现 |
 | `mempal_peek_partner` | 读 partner agent 当前 session（live，不存储） |
 | `mempal_cowork_push` | 主动投递 ephemeral handoff 到 partner inbox（at-next-submit 交付） |
+| `mempal_fact_check` | 离线矛盾检测（SimilarNameConflict / RelationContradiction / StaleFact）—— P9 |
 
 ## mempal 检索纪律
 
-当 agent 回答本项目的历史决策、实现细节、bug 成因、架构理由、或"为什么/怎么工作"类问题时：
+当 agent 回答本项目的历史决策、实现细节、bug 成因、架构理由、或“为什么/怎么工作”类问题时：
 
 1. 每个 session 先调一次 `mempal_status`，再决定是否使用 `wing` / `room` filter。
 2. 对项目事实优先使用 `mempal_search`，不要只靠 repo grep、当前对话记忆或常识猜测。
@@ -113,7 +123,7 @@ agent-spec lint specs/p6-cowork-peek-and-decide.spec.md --min-score 0.7
    - 用 `entities` 和 `topics` 缩小歧义结果集
 7. 将 `content` 视为 raw text；不要期待或解析 `mempal_search` 返回 AAAK 格式文本。
 8. 基于 mempal 结果作答时，必须引用 `drawer_id` 和 `source_file`。
-9. 如果没有找到高信号结果，要明确说明"没找到足够证据"，然后扩大查询范围；不要猜。
+9. 如果没有找到高信号结果，要明确说明“没找到足够证据”，然后扩大查询范围；不要猜。
 
 ## Workspace 结构
 
