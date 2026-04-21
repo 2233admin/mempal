@@ -613,8 +613,8 @@ async fn test_knowledge_drawer_gets_synthetic_knowledge_source_uri() {
             "domain": "skill",
             "field": "debugging",
             "statement": "Debug by reproducing before patching.",
-            "tier": "shu",
-            "status": "promoted",
+            "tier": "dao_tian",
+            "status": "canonical",
             "supporting_refs": ["drawer_ev_001"]
         }))
         .await
@@ -625,5 +625,5 @@ async fn test_knowledge_drawer_gets_synthetic_knowledge_source_uri() {
         .expect("load knowledge drawer")
         .expect("knowledge drawer exists");
     let source = drawer.source_file.expect("knowledge source uri");
-    assert!(source.starts_with("knowledge://skill/debugging/shu/"));
+    assert!(source.starts_with("knowledge://skill/debugging/dao_tian/"));
 }

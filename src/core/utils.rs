@@ -82,7 +82,7 @@ pub fn knowledge_source_file(
         "knowledge://{}/{}/{}/{}",
         enum_slug(memory_domain_as_str(domain)),
         slugify_uri_component(field),
-        enum_slug(knowledge_tier_as_str(tier)),
+        knowledge_tier_as_str(tier),
         slugify_uri_component(statement)
     )
 }
