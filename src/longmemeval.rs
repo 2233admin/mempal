@@ -9,7 +9,7 @@ use mempal::aaak::{AaakCodec, AaakMeta};
 use mempal::core::{
     config::Config,
     db::Database,
-    types::{Drawer, SourceType, TaxonomyEntry},
+    types::{BootstrapEvidenceArgs, Drawer, SourceType, TaxonomyEntry},
     utils::{build_drawer_id, route_room_from_taxonomy},
 };
 use mempal::embed::{ConfiguredEmbedderFactory, Embedder};
@@ -444,17 +444,17 @@ async fn ingest_corpus<E: Embedder + ?Sized>(
             BenchMode::Raw | BenchMode::Aaak => None,
         };
 
-        db.insert_drawer(&Drawer::new_bootstrap_evidence(
-            item.drawer_id.clone(),
-            item.retrieval_text.clone(),
-            BENCH_WING.to_string(),
-            room.clone(),
-            Some(format!("longmemeval://{}", item.corpus_id)),
-            SourceType::Conversation,
-            item.timestamp.clone(),
-            Some(0),
-            0,
-        ))
+        db.insert_drawer(&Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
+            id: item.drawer_id.clone(),
+            content: item.retrieval_text.clone(),
+            wing: BENCH_WING.to_string(),
+            room: room.clone(),
+            source_file: Some(format!("longmemeval://{}", item.corpus_id)),
+            source_type: SourceType::Conversation,
+            added_at: item.timestamp.clone(),
+            chunk_index: Some(0),
+            importance: 0,
+        }))
         .with_context(|| format!("failed to insert drawer {}", item.drawer_id))?;
         db.insert_vector(&item.drawer_id, vector)
             .with_context(|| format!("failed to insert vector for {}", item.drawer_id))?;

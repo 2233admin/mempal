@@ -1,7 +1,10 @@
 //! Integration tests for P12 stage-1 mind-model bootstrap schema/core work.
 
-use mempal::core::db::Database;
-use mempal::core::types::{AnchorKind, Drawer, MemoryDomain, MemoryKind, Provenance, SourceType};
+use mempal::core::types::{
+    AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
+    SourceType, TriggerHints,
+};
+use mempal::core::{anchor, db::Database};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -69,6 +72,13 @@ fn create_v4_db(path: &std::path::Path) {
         "#,
     )
     .expect("apply v4 schema");
+}
+
+fn new_db() -> (TempDir, Database) {
+    let tmp = TempDir::new().expect("tempdir");
+    let db_path = tmp.path().join("palace.db");
+    let db = Database::open(&db_path).expect("open db");
+    (tmp, db)
 }
 
 #[test]
@@ -175,6 +185,103 @@ fn test_global_anchor_rejected_for_non_global_domain() {
     let message = error.to_string();
     assert!(
         message.contains("global") && message.contains("domain"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn test_insert_load_roundtrip_preserves_json_metadata_and_read_paths() {
+    let (_tmp, db) = new_db();
+    let drawer = Drawer {
+        id: "drawer_knowledge_roundtrip".to_string(),
+        content: "Detailed rationale body".to_string(),
+        wing: "mempal".to_string(),
+        room: Some("bootstrap".to_string()),
+        source_file: Some("knowledge://project/bootstrap/typed-drawer".to_string()),
+        source_type: SourceType::Manual,
+        added_at: "1710002000".to_string(),
+        chunk_index: Some(0),
+        importance: 3,
+        memory_kind: MemoryKind::Knowledge,
+        domain: MemoryDomain::Project,
+        field: anchor::DEFAULT_FIELD.to_string(),
+        anchor_kind: AnchorKind::Repo,
+        anchor_id: anchor::LEGACY_REPO_ANCHOR_ID.to_string(),
+        parent_anchor_id: None,
+        provenance: Some(Provenance::Human),
+        statement: Some("Typed drawers persist structured metadata.".to_string()),
+        tier: Some(KnowledgeTier::Shu),
+        status: Some(KnowledgeStatus::Promoted),
+        supporting_refs: vec!["drawer_ev_001".to_string(), "drawer_ev_002".to_string()],
+        counterexample_refs: vec!["drawer_cex_001".to_string()],
+        teaching_refs: Vec::new(),
+        verification_refs: vec!["drawer_verify_001".to_string()],
+        scope_constraints: Some("Task 1 only".to_string()),
+        trigger_hints: Some(TriggerHints {
+            intent_tags: vec!["schema".to_string(), "bootstrap".to_string()],
+            workflow_bias: vec!["tdd".to_string()],
+            tool_needs: vec!["cargo-check".to_string()],
+        }),
+    };
+
+    db.insert_drawer(&drawer).expect("insert drawer");
+
+    let loaded = db
+        .get_drawer(&drawer.id)
+        .expect("get drawer")
+        .expect("drawer exists");
+    assert_eq!(loaded.supporting_refs, drawer.supporting_refs);
+    assert_eq!(loaded.counterexample_refs, drawer.counterexample_refs);
+    assert_eq!(loaded.trigger_hints, drawer.trigger_hints);
+
+    let top = db.top_drawers(5).expect("top drawers");
+    let top_loaded = top
+        .into_iter()
+        .find(|candidate| candidate.id == drawer.id)
+        .expect("drawer present in top_drawers");
+    assert_eq!(top_loaded.supporting_refs, drawer.supporting_refs);
+    assert_eq!(top_loaded.counterexample_refs, drawer.counterexample_refs);
+    assert_eq!(top_loaded.trigger_hints, drawer.trigger_hints);
+}
+
+#[test]
+fn test_read_path_rejects_non_array_or_non_string_list_payloads() {
+    let (_tmp, db) = new_db();
+    db.conn()
+        .execute(
+            r#"
+            INSERT INTO drawers (
+                id, content, wing, room, source_file, source_type, added_at, chunk_index, importance,
+                memory_kind, domain, field, anchor_kind, anchor_id, parent_anchor_id, provenance,
+                statement, tier, status, supporting_refs, counterexample_refs, teaching_refs,
+                verification_refs, scope_constraints, trigger_hints
+            )
+            VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?5, NULL, 0, ?6, ?7, ?8, ?9, ?10, NULL, ?11,
+                    NULL, NULL, NULL, ?12, '[]', '[]', '[]', NULL, NULL)
+            "#,
+            (
+                "drawer_bad_json",
+                "bad payload",
+                "mempal",
+                "manual",
+                "1710003000",
+                "evidence",
+                "project",
+                anchor::DEFAULT_FIELD,
+                "repo",
+                anchor::LEGACY_REPO_ANCHOR_ID,
+                "human",
+                r#"["ok", 42]"#,
+            ),
+        )
+        .expect("insert malformed drawer");
+
+    let error = db
+        .get_drawer("drawer_bad_json")
+        .expect_err("malformed list payload should fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("JSON") || message.contains("list"),
         "unexpected error: {message}"
     );
 }

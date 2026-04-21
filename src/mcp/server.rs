@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::{
     db::Database,
-    types::{Drawer, SourceType, Triple},
+    types::{BootstrapEvidenceArgs, Drawer, SourceType, Triple},
     utils::{build_drawer_id, build_triple_id, current_timestamp, source_file_or_synthetic},
 };
 use crate::cowork::{PeekError, PeekRequest as CoworkPeekRequest, Tool, peek_partner};
@@ -197,17 +197,17 @@ impl MempalMcpServer {
 
         if !db.drawer_exists(&drawer_id).map_err(db_error)? {
             let source_file = source_file_or_synthetic(&drawer_id, request.source.as_deref());
-            db.insert_drawer(&Drawer::new_bootstrap_evidence(
-                drawer_id.clone(),
-                request.content,
-                request.wing,
-                request.room,
-                Some(source_file),
-                SourceType::Manual,
-                current_timestamp(),
-                Some(0),
-                request.importance.unwrap_or(0),
-            ))
+            db.insert_drawer(&Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
+                id: drawer_id.clone(),
+                content: request.content,
+                wing: request.wing,
+                room: request.room,
+                source_file: Some(source_file),
+                source_type: SourceType::Manual,
+                added_at: current_timestamp(),
+                chunk_index: Some(0),
+                importance: request.importance.unwrap_or(0),
+            }))
             .map_err(db_error)?;
             db.insert_vector(&drawer_id, &vector).map_err(db_error)?;
         }
@@ -796,17 +796,17 @@ mod tests {
         importance: i32,
     ) {
         let db = Database::open(db_path).expect("open db");
-        db.insert_drawer(&Drawer::new_bootstrap_evidence(
-            id.to_string(),
-            content.to_string(),
-            wing.to_string(),
-            room.map(str::to_string),
-            Some(source_file.to_string()),
-            SourceType::Manual,
-            "1713000000".to_string(),
-            Some(0),
+        db.insert_drawer(&Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
+            id: id.to_string(),
+            content: content.to_string(),
+            wing: wing.to_string(),
+            room: room.map(str::to_string),
+            source_file: Some(source_file.to_string()),
+            source_type: SourceType::Manual,
+            added_at: "1713000000".to_string(),
+            chunk_index: Some(0),
             importance,
-        ))
+        }))
         .expect("insert drawer");
         db.insert_vector(id, &[0.1, 0.2, 0.3])
             .expect("insert vector");

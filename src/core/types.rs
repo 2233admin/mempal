@@ -1,3 +1,4 @@
+use super::anchor;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,40 +102,39 @@ pub struct Drawer {
     pub trigger_hints: Option<TriggerHints>,
 }
 
-impl Drawer {
-    pub fn new_bootstrap_evidence(
-        id: String,
-        content: String,
-        wing: String,
-        room: Option<String>,
-        source_file: Option<String>,
-        source_type: SourceType,
-        added_at: String,
-        chunk_index: Option<i64>,
-        importance: i32,
-    ) -> Self {
-        let provenance = match source_type {
-            SourceType::Project => Some(Provenance::Research),
-            SourceType::Conversation | SourceType::Manual => Some(Provenance::Human),
-        };
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapEvidenceArgs {
+    pub id: String,
+    pub content: String,
+    pub wing: String,
+    pub room: Option<String>,
+    pub source_file: Option<String>,
+    pub source_type: SourceType,
+    pub added_at: String,
+    pub chunk_index: Option<i64>,
+    pub importance: i32,
+}
 
+impl Drawer {
+    pub fn new_bootstrap_evidence(args: BootstrapEvidenceArgs) -> Self {
+        let defaults = anchor::bootstrap_defaults(&args.source_type);
         Self {
-            id,
-            content,
-            wing,
-            room,
-            source_file,
-            source_type,
-            added_at,
-            chunk_index,
-            importance,
+            id: args.id,
+            content: args.content,
+            wing: args.wing,
+            room: args.room,
+            source_file: args.source_file,
+            source_type: args.source_type,
+            added_at: args.added_at,
+            chunk_index: args.chunk_index,
+            importance: args.importance,
             memory_kind: MemoryKind::Evidence,
             domain: MemoryDomain::Project,
-            field: "general".to_string(),
-            anchor_kind: AnchorKind::Repo,
-            anchor_id: "repo://legacy".to_string(),
-            parent_anchor_id: None,
-            provenance,
+            field: defaults.field,
+            anchor_kind: defaults.anchor_kind,
+            anchor_id: defaults.anchor_id,
+            parent_anchor_id: defaults.parent_anchor_id,
+            provenance: Some(defaults.provenance),
             statement: None,
             tier: None,
             status: None,

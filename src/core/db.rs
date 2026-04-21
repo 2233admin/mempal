@@ -720,10 +720,23 @@ fn apply_migrations(conn: &Connection) -> Result<(), DbError> {
         .iter()
         .filter(|migration| migration.version > current_version)
     {
-        conn.execute_batch(migration.sql)?;
-        set_user_version(conn, migration.version)?;
+        apply_migration_atomic(conn, migration)?;
     }
 
+    Ok(())
+}
+
+fn apply_migration_atomic(conn: &Connection, migration: &Migration) -> Result<(), DbError> {
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    if let Err(error) = (|| -> Result<(), DbError> {
+        conn.execute_batch(migration.sql)?;
+        set_user_version(conn, migration.version)?;
+        conn.execute_batch("COMMIT;")?;
+        Ok(())
+    })() {
+        let _ = conn.execute_batch("ROLLBACK;");
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -1017,15 +1030,7 @@ fn parse_string_list(raw: Option<&str>) -> Result<Vec<String>, DbError> {
     let Some(raw) = raw else {
         return Ok(Vec::new());
     };
-    let value: Value = serde_json::from_str(raw)?;
-    let refs = value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.as_str())
-        .map(ToOwned::to_owned)
-        .collect();
-    Ok(refs)
+    Ok(serde_json::from_str::<Vec<String>>(raw)?)
 }
 
 fn parse_optional_json<T>(raw: Option<&str>) -> Result<Option<T>, DbError>
@@ -1133,5 +1138,54 @@ fn build_fts_match_query(query: &str) -> Option<String> {
         None
     } else {
         Some(terms.join(" AND "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_atomic_migration_rolls_back_partial_schema_changes() {
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE drawers (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL
+            );
+            PRAGMA user_version = 4;
+            "#,
+        )
+        .expect("create base schema");
+
+        let migration = Migration {
+            version: 5,
+            sql: r#"
+            ALTER TABLE drawers ADD COLUMN memory_kind TEXT;
+            ALTER TABLE missing_table ADD COLUMN nope TEXT;
+            "#,
+        };
+
+        let error = apply_migration_atomic(&conn, &migration).expect_err("migration should fail");
+        assert!(
+            matches!(error, DbError::Sqlite(_)),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(read_user_version(&conn).expect("user_version"), 4);
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(drawers)")
+            .expect("table_info");
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query columns")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect columns");
+
+        assert!(
+            !columns.iter().any(|column| column == "memory_kind"),
+            "failed migration must not leave partial columns behind"
+        );
     }
 }
