@@ -813,17 +813,14 @@ async fn test_search_result_exposes_knowledge_metadata_without_rewriting_content
     assert_eq!(result.drawer_id, drawer.id);
     assert_eq!(result.content, raw_content);
     assert_ne!(result.content, statement);
-    assert_eq!(result.memory_kind.as_deref(), Some("knowledge"));
-    assert_eq!(result.domain.as_deref(), Some("project"));
-    assert_eq!(result.field.as_deref(), Some(anchor::DEFAULT_FIELD));
+    assert_eq!(result.memory_kind, "knowledge");
+    assert_eq!(result.domain, "project");
+    assert_eq!(result.field, anchor::DEFAULT_FIELD);
     assert_eq!(result.statement.as_deref(), Some(statement));
     assert_eq!(result.tier.as_deref(), Some("shu"));
     assert_eq!(result.status.as_deref(), Some("promoted"));
-    assert_eq!(result.anchor_kind.as_deref(), Some("repo"));
-    assert_eq!(
-        result.anchor_id.as_deref(),
-        Some("repo://drawer_search_knowledge")
-    );
+    assert_eq!(result.anchor_kind, "repo");
+    assert_eq!(result.anchor_id, "repo://drawer_search_knowledge");
     assert_eq!(result.parent_anchor_id, None);
 }
 

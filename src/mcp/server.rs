@@ -647,19 +647,8 @@ impl MempalMcpServer {
         Ok(Json(SearchResponse {
             results: results
                 .into_iter()
-                .map(|result| {
-                    let drawer = db
-                        .get_drawer(&result.drawer_id)
-                        .map_err(db_error)?
-                        .ok_or_else(|| {
-                            ErrorData::internal_error(
-                                format!("search result missing drawer {}", result.drawer_id),
-                                None,
-                            )
-                        })?;
-                    Ok(SearchResultDto::with_signals_from_result(result, &drawer))
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?,
+                .map(SearchResultDto::with_signals_from_result)
+                .collect(),
         }))
     }
 

@@ -2,7 +2,10 @@
 
 use crate::core::{
     db::Database,
-    types::{RouteDecision, SearchResult},
+    types::{
+        AnchorKind, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, RouteDecision,
+        SearchResult,
+    },
     utils::source_file_or_synthetic,
 };
 use crate::embed::{EmbedError, Embedder};
@@ -132,19 +135,12 @@ pub fn search_with_vector_and_filters(
     let vector_results =
         search_by_vector_with_filters(db, query_vector, route.clone(), filters, top_k)?;
 
-    let fts_ids = search_fts_with_filters(
-        db,
-        query,
-        route.wing.as_deref(),
-        route.room.as_deref(),
-        filters,
-        top_k,
-    )?;
+    let fts_results = search_fts_with_filters(db, query, &route, filters, top_k)?;
 
-    let mut results = if fts_ids.is_empty() {
+    let mut results = if fts_results.is_empty() {
         vector_results
     } else {
-        rrf_merge(vector_results, &fts_ids, &route, db, top_k)
+        rrf_merge(vector_results, fts_results, top_k)
     };
 
     // Inject tunnel hints: for each result, check if its room exists in other wings
@@ -187,9 +183,7 @@ fn inject_tunnel_hints(db: &Database, results: &mut [SearchResult]) {
 /// RRF score = sum(1 / (k + rank)) across both lists, with k=60.
 fn rrf_merge(
     vector_results: Vec<SearchResult>,
-    fts_ids: &[(String, f64)],
-    route: &RouteDecision,
-    db: &Database,
+    fts_results: Vec<SearchResult>,
     top_k: usize,
 ) -> Vec<SearchResult> {
     use std::collections::HashMap;
@@ -207,28 +201,10 @@ fn rrf_merge(
     }
 
     // Score FTS results and merge
-    for (rank, (id, _bm25_score)) in fts_ids.iter().enumerate() {
+    for (rank, result) in fts_results.into_iter().enumerate() {
         let score = 1.0 / (RRF_K + rank as f64 + 1.0);
-        *scores.entry(id.clone()).or_default() += score;
-
-        // If this ID wasn't in vector results, load the drawer
-        if !result_map.contains_key(id) {
-            if let Ok(Some(drawer)) = db.get_drawer(id) {
-                result_map.insert(
-                    id.clone(),
-                    SearchResult {
-                        drawer_id: drawer.id,
-                        content: drawer.content,
-                        wing: drawer.wing,
-                        room: drawer.room,
-                        source_file: source_file_or_synthetic(id, drawer.source_file.as_deref()),
-                        similarity: 0.0, // will be overwritten below
-                        route: route.clone(),
-                        tunnel_hints: vec![],
-                    },
-                );
-            }
-        }
+        *scores.entry(result.drawer_id.clone()).or_default() += score;
+        result_map.entry(result.drawer_id.clone()).or_insert(result);
     }
 
     // Sort by RRF score descending, fill in similarity field
@@ -323,7 +299,9 @@ fn search_by_vector_with_filters(
             WHERE embedding MATCH vec_f32(?1)
               AND k = ?2
         )
-        SELECT d.id, d.content, d.wing, d.room, d.source_file, matches.distance
+        SELECT d.id, d.content, d.wing, d.room, d.source_file,
+               d.memory_kind, d.domain, d.field, d.statement, d.tier, d.status,
+               d.anchor_kind, d.anchor_id, d.parent_anchor_id, matches.distance
         FROM matches
         JOIN drawers d ON d.id = matches.id
         {}
@@ -353,19 +331,8 @@ fn search_by_vector_with_filters(
                 top_k,
             ),
             |row| {
-                let distance: f64 = row.get(5)?;
-                let drawer_id: String = row.get(0)?;
-                let source_file = row.get::<_, Option<String>>(4)?;
-                Ok(SearchResult {
-                    drawer_id: drawer_id.clone(),
-                    content: row.get(1)?,
-                    wing: row.get(2)?,
-                    room: row.get(3)?,
-                    source_file: source_file_or_synthetic(&drawer_id, source_file.as_deref()),
-                    similarity: (1.0_f64 - distance) as f32,
-                    route: route.clone(),
-                    tunnel_hints: vec![],
-                })
+                let distance: f64 = row.get(14)?;
+                map_search_result_row(row, &route, (1.0_f64 - distance) as f32)
             },
         )
         .map_err(SearchError::ExecuteSearch)?
@@ -378,18 +345,19 @@ fn search_by_vector_with_filters(
 fn search_fts_with_filters(
     db: &Database,
     query: &str,
-    wing: Option<&str>,
-    room: Option<&str>,
+    route: &RouteDecision,
     filters: &SearchFilters,
     limit: usize,
-) -> Result<Vec<(String, f64)>> {
+) -> Result<Vec<SearchResult>> {
     let Some(match_query) = build_fts_match_query(query) else {
         return Ok(Vec::new());
     };
     let limit = i64::try_from(limit).map_err(|_| SearchError::InvalidTopK)?;
     let sql = format!(
         r#"
-        SELECT d.id, fts.rank
+        SELECT d.id, d.content, d.wing, d.room, d.source_file,
+               d.memory_kind, d.domain, d.field, d.statement, d.tier, d.status,
+               d.anchor_kind, d.anchor_id, d.parent_anchor_id, fts.rank
         FROM drawers_fts fts
         JOIN drawers d ON d.rowid = fts.rowid
         {}
@@ -407,8 +375,8 @@ fn search_fts_with_filters(
         .query_map(
             (
                 match_query.as_str(),
-                wing,
-                room,
+                route.wing.as_deref(),
+                route.room.as_deref(),
                 filters.memory_kind.as_deref(),
                 filters.domain.as_deref(),
                 filters.field.as_deref(),
@@ -417,11 +385,104 @@ fn search_fts_with_filters(
                 filters.anchor_kind.as_deref(),
                 limit,
             ),
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)),
+            |row| map_search_result_row(row, route, 0.0),
         )
         .map_err(SearchError::ExecuteSearch)?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(SearchError::CollectSearchRows)
+}
+
+fn map_search_result_row(
+    row: &rusqlite::Row<'_>,
+    route: &RouteDecision,
+    similarity: f32,
+) -> rusqlite::Result<SearchResult> {
+    let drawer_id: String = row.get(0)?;
+    let source_file = row.get::<_, Option<String>>(4)?;
+    Ok(SearchResult {
+        drawer_id: drawer_id.clone(),
+        content: row.get(1)?,
+        wing: row.get(2)?,
+        room: row.get(3)?,
+        source_file: source_file_or_synthetic(&drawer_id, source_file.as_deref()),
+        memory_kind: memory_kind_from_str(&row.get::<_, String>(5)?)?,
+        domain: memory_domain_from_str(&row.get::<_, String>(6)?)?,
+        field: row.get(7)?,
+        statement: row.get(8)?,
+        tier: row
+            .get::<_, Option<String>>(9)?
+            .map(|value| knowledge_tier_from_str(&value))
+            .transpose()?,
+        status: row
+            .get::<_, Option<String>>(10)?
+            .map(|value| knowledge_status_from_str(&value))
+            .transpose()?,
+        anchor_kind: anchor_kind_from_str(&row.get::<_, String>(11)?)?,
+        anchor_id: row.get(12)?,
+        parent_anchor_id: row.get(13)?,
+        similarity,
+        route: route.clone(),
+        tunnel_hints: vec![],
+    })
+}
+
+fn invalid_enum_value(kind: &'static str, value: String) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid {kind}: {value}"),
+        )),
+    )
+}
+
+fn memory_kind_from_str(value: &str) -> rusqlite::Result<MemoryKind> {
+    match value {
+        "evidence" => Ok(MemoryKind::Evidence),
+        "knowledge" => Ok(MemoryKind::Knowledge),
+        _ => Err(invalid_enum_value("memory_kind", value.to_string())),
+    }
+}
+
+fn memory_domain_from_str(value: &str) -> rusqlite::Result<MemoryDomain> {
+    match value {
+        "project" => Ok(MemoryDomain::Project),
+        "agent" => Ok(MemoryDomain::Agent),
+        "skill" => Ok(MemoryDomain::Skill),
+        "global" => Ok(MemoryDomain::Global),
+        _ => Err(invalid_enum_value("domain", value.to_string())),
+    }
+}
+
+fn knowledge_tier_from_str(value: &str) -> rusqlite::Result<KnowledgeTier> {
+    match value {
+        "qi" => Ok(KnowledgeTier::Qi),
+        "shu" => Ok(KnowledgeTier::Shu),
+        "dao_ren" => Ok(KnowledgeTier::DaoRen),
+        "dao_tian" => Ok(KnowledgeTier::DaoTian),
+        _ => Err(invalid_enum_value("tier", value.to_string())),
+    }
+}
+
+fn knowledge_status_from_str(value: &str) -> rusqlite::Result<KnowledgeStatus> {
+    match value {
+        "candidate" => Ok(KnowledgeStatus::Candidate),
+        "promoted" => Ok(KnowledgeStatus::Promoted),
+        "canonical" => Ok(KnowledgeStatus::Canonical),
+        "demoted" => Ok(KnowledgeStatus::Demoted),
+        "retired" => Ok(KnowledgeStatus::Retired),
+        _ => Err(invalid_enum_value("status", value.to_string())),
+    }
+}
+
+fn anchor_kind_from_str(value: &str) -> rusqlite::Result<AnchorKind> {
+    match value {
+        "global" => Ok(AnchorKind::Global),
+        "repo" => Ok(AnchorKind::Repo),
+        "worktree" => Ok(AnchorKind::Worktree),
+        _ => Err(invalid_enum_value("anchor_kind", value.to_string())),
+    }
 }
 
 fn build_fts_match_query(query: &str) -> Option<String> {

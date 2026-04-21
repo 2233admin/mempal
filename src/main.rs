@@ -509,8 +509,8 @@ async fn search_command(db: &Database, config: &Config, args: SearchCommandArgs<
     .await?;
     let results = results
         .into_iter()
-        .map(|result| build_cli_search_result(db, result))
-        .collect::<Result<Vec<_>>>()?;
+        .map(build_cli_search_result)
+        .collect::<Vec<_>>();
 
     if args.json {
         println!(
@@ -583,16 +583,8 @@ struct CliSearchResult {
     parent_anchor_id: Option<String>,
 }
 
-fn build_cli_search_result(
-    db: &Database,
-    result: mempal::core::types::SearchResult,
-) -> Result<CliSearchResult> {
-    let drawer = db
-        .get_drawer(&result.drawer_id)
-        .with_context(|| format!("failed to load drawer {}", result.drawer_id))?
-        .ok_or_else(|| anyhow::anyhow!("search result missing drawer {}", result.drawer_id))?;
-
-    Ok(CliSearchResult {
+fn build_cli_search_result(result: mempal::core::types::SearchResult) -> CliSearchResult {
+    CliSearchResult {
         drawer_id: result.drawer_id,
         content: result.content,
         wing: result.wing,
@@ -601,24 +593,24 @@ fn build_cli_search_result(
         similarity: result.similarity,
         route: result.route,
         tunnel_hints: result.tunnel_hints,
-        memory_kind: memory_kind_slug(&drawer.memory_kind).to_string(),
-        domain: domain_slug(&drawer.domain).to_string(),
-        field: drawer.field,
-        statement: drawer.statement,
-        tier: drawer
+        memory_kind: memory_kind_slug(&result.memory_kind).to_string(),
+        domain: domain_slug(&result.domain).to_string(),
+        field: result.field,
+        statement: result.statement,
+        tier: result
             .tier
             .as_ref()
             .map(knowledge_tier_slug)
             .map(str::to_string),
-        status: drawer
+        status: result
             .status
             .as_ref()
             .map(knowledge_status_slug)
             .map(str::to_string),
-        anchor_kind: anchor_kind_slug(&drawer.anchor_kind).to_string(),
-        anchor_id: drawer.anchor_id,
-        parent_anchor_id: drawer.parent_anchor_id,
-    })
+        anchor_kind: anchor_kind_slug(&result.anchor_kind).to_string(),
+        anchor_id: result.anchor_id,
+        parent_anchor_id: result.parent_anchor_id,
+    }
 }
 
 fn memory_kind_slug(value: &MemoryKind) -> &'static str {
