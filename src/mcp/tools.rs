@@ -1,4 +1,7 @@
-use crate::core::types::{RouteDecision, SearchResult, TaxonomyEntry};
+use crate::core::types::{
+    AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, RouteDecision,
+    SearchResult, TaxonomyEntry,
+};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +26,24 @@ pub struct SearchRequest {
 
     /// Maximum number of results to return. Defaults to 10 when omitted.
     pub top_k: Option<usize>,
+
+    /// Optional memory kind filter (`evidence` or `knowledge`).
+    pub memory_kind: Option<String>,
+
+    /// Optional domain filter (`project`, `agent`, `skill`, `global`).
+    pub domain: Option<String>,
+
+    /// Optional bootstrap field filter.
+    pub field: Option<String>,
+
+    /// Optional knowledge tier filter.
+    pub tier: Option<String>,
+
+    /// Optional knowledge status filter.
+    pub status: Option<String>,
+
+    /// Optional anchor kind filter (`global`, `repo`, `worktree`).
+    pub anchor_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -52,6 +73,19 @@ pub struct SearchResultDto {
     pub emotions: Vec<String>,
     /// Importance derived from AAAK flags, normalized to the existing 2-4 scale.
     pub importance_stars: u8,
+    pub memory_kind: Option<String>,
+    pub domain: Option<String>,
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub anchor_kind: Option<String>,
+    pub anchor_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_anchor_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -329,7 +363,7 @@ pub struct FactCheckResponse {
 }
 
 impl SearchResultDto {
-    pub fn with_signals_from_result(value: SearchResult) -> Self {
+    pub fn with_signals_from_result(value: SearchResult, drawer: &Drawer) -> Self {
         let signals = crate::aaak::analyze(&value.content);
 
         Self {
@@ -346,7 +380,67 @@ impl SearchResultDto {
             flags: signals.flags,
             emotions: signals.emotions,
             importance_stars: signals.importance_stars,
+            memory_kind: Some(memory_kind_slug(&drawer.memory_kind).to_string()),
+            domain: Some(domain_slug(&drawer.domain).to_string()),
+            field: Some(drawer.field.clone()),
+            statement: drawer.statement.clone(),
+            tier: drawer
+                .tier
+                .as_ref()
+                .map(knowledge_tier_slug)
+                .map(str::to_string),
+            status: drawer
+                .status
+                .as_ref()
+                .map(knowledge_status_slug)
+                .map(str::to_string),
+            anchor_kind: Some(anchor_kind_slug(&drawer.anchor_kind).to_string()),
+            anchor_id: Some(drawer.anchor_id.clone()),
+            parent_anchor_id: drawer.parent_anchor_id.clone(),
         }
+    }
+}
+
+fn memory_kind_slug(value: &MemoryKind) -> &'static str {
+    match value {
+        MemoryKind::Evidence => "evidence",
+        MemoryKind::Knowledge => "knowledge",
+    }
+}
+
+fn domain_slug(value: &MemoryDomain) -> &'static str {
+    match value {
+        MemoryDomain::Project => "project",
+        MemoryDomain::Agent => "agent",
+        MemoryDomain::Skill => "skill",
+        MemoryDomain::Global => "global",
+    }
+}
+
+fn knowledge_tier_slug(value: &KnowledgeTier) -> &'static str {
+    match value {
+        KnowledgeTier::Qi => "qi",
+        KnowledgeTier::Shu => "shu",
+        KnowledgeTier::DaoRen => "dao_ren",
+        KnowledgeTier::DaoTian => "dao_tian",
+    }
+}
+
+fn knowledge_status_slug(value: &KnowledgeStatus) -> &'static str {
+    match value {
+        KnowledgeStatus::Candidate => "candidate",
+        KnowledgeStatus::Promoted => "promoted",
+        KnowledgeStatus::Canonical => "canonical",
+        KnowledgeStatus::Demoted => "demoted",
+        KnowledgeStatus::Retired => "retired",
+    }
+}
+
+fn anchor_kind_slug(value: &AnchorKind) -> &'static str {
+    match value {
+        AnchorKind::Global => "global",
+        AnchorKind::Repo => "repo",
+        AnchorKind::Worktree => "worktree",
     }
 }
 
@@ -374,7 +468,10 @@ impl From<TaxonomyEntry> for TaxonomyEntryDto {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::{RouteDecision, SearchResult};
+    use crate::core::types::{
+        AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
+        RouteDecision, SearchResult, SourceType,
+    };
 
     use super::SearchResultDto;
 
@@ -396,10 +493,41 @@ mod tests {
         }
     }
 
+    fn sample_drawer() -> Drawer {
+        Drawer {
+            id: "drawer-1".to_string(),
+            content: "stored body".to_string(),
+            wing: "mempal".to_string(),
+            room: Some("signals".to_string()),
+            source_file: Some("/tmp/signals.md".to_string()),
+            source_type: SourceType::Manual,
+            added_at: "1710000000".to_string(),
+            chunk_index: Some(0),
+            importance: 2,
+            memory_kind: MemoryKind::Knowledge,
+            domain: MemoryDomain::Project,
+            field: "bootstrap".to_string(),
+            anchor_kind: AnchorKind::Repo,
+            anchor_id: "repo://signals".to_string(),
+            parent_anchor_id: None,
+            provenance: Some(Provenance::Human),
+            statement: Some("normalized statement".to_string()),
+            tier: Some(KnowledgeTier::Shu),
+            status: Some(KnowledgeStatus::Promoted),
+            supporting_refs: vec!["drawer_ev_001".to_string()],
+            counterexample_refs: Vec::new(),
+            teaching_refs: Vec::new(),
+            verification_refs: Vec::new(),
+            scope_constraints: None,
+            trigger_hints: None,
+        }
+    }
+
     #[test]
     fn test_with_signals_preserves_raw_content_and_citations() {
         let original = "We decided to use Arc<Mutex<>> for state because shared ownership mattered";
-        let dto = SearchResultDto::with_signals_from_result(sample_result(original));
+        let dto =
+            SearchResultDto::with_signals_from_result(sample_result(original), &sample_drawer());
 
         assert_eq!(dto.content, original);
         assert!(!dto.content.starts_with("V1|"));
@@ -407,6 +535,8 @@ mod tests {
         assert_eq!(dto.drawer_id, "drawer-1");
         assert_eq!(dto.source_file, "/tmp/signals.md");
         assert_eq!(dto.tunnel_hints, vec!["docs".to_string()]);
+        assert_eq!(dto.memory_kind.as_deref(), Some("knowledge"));
+        assert_eq!(dto.tier.as_deref(), Some("shu"));
         assert!(dto.flags.contains(&"DECISION".to_string()));
         assert!(dto.importance_stars >= 2);
         assert!(!dto.entities.is_empty());
@@ -414,7 +544,7 @@ mod tests {
 
     #[test]
     fn test_with_signals_applies_empty_content_sentinels() {
-        let dto = SearchResultDto::with_signals_from_result(sample_result(""));
+        let dto = SearchResultDto::with_signals_from_result(sample_result(""), &sample_drawer());
 
         assert_eq!(dto.entities, vec!["UNK".to_string()]);
         assert_eq!(dto.flags, vec!["CORE".to_string()]);

@@ -15,7 +15,7 @@ use crate::core::{
 };
 use crate::cowork::{PeekError, PeekRequest as CoworkPeekRequest, Tool, peek_partner};
 use crate::embed::EmbedderFactory;
-use crate::search::{resolve_route, search_with_vector};
+use crate::search::{SearchFilters, resolve_route, search_with_vector_and_filters};
 use anyhow::Context;
 use rmcp::{
     ErrorData, Json, ServerHandler, ServiceExt,
@@ -81,6 +81,17 @@ impl MempalMcpServer {
         let request = serde_json::from_value(value)
             .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
         self.mempal_ingest(Parameters(request))
+            .await
+            .map(|response| response.0)
+    }
+
+    pub async fn search_json_for_test(
+        &self,
+        value: Value,
+    ) -> std::result::Result<SearchResponse, ErrorData> {
+        let request = serde_json::from_value(value)
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+        self.mempal_search(Parameters(request))
             .await
             .map(|response| response.0)
     }
@@ -597,6 +608,14 @@ impl MempalMcpServer {
         &self,
         Parameters(request): Parameters<SearchRequest>,
     ) -> std::result::Result<Json<SearchResponse>, ErrorData> {
+        let filters = SearchFilters {
+            memory_kind: trim_to_owned(request.memory_kind.as_deref()),
+            domain: trim_to_owned(request.domain.as_deref()),
+            field: trim_to_owned(request.field.as_deref()),
+            tier: trim_to_owned(request.tier.as_deref()),
+            status: trim_to_owned(request.status.as_deref()),
+            anchor_kind: trim_to_owned(request.anchor_kind.as_deref()),
+        };
         let embedder = self.embedder_factory.build().await.map_err(|error| {
             ErrorData::internal_error(format!("failed to build embedder: {error}"), None)
         })?;
@@ -615,11 +634,12 @@ impl MempalMcpServer {
             request.room.as_deref(),
         )
         .map_err(|error| ErrorData::internal_error(format!("routing failed: {error}"), None))?;
-        let results = search_with_vector(
+        let results = search_with_vector_and_filters(
             &db,
             &request.query,
             &query_vector,
             route,
+            &filters,
             request.top_k.unwrap_or(10),
         )
         .map_err(|error| ErrorData::internal_error(format!("search failed: {error}"), None))?;
@@ -627,8 +647,19 @@ impl MempalMcpServer {
         Ok(Json(SearchResponse {
             results: results
                 .into_iter()
-                .map(SearchResultDto::with_signals_from_result)
-                .collect(),
+                .map(|result| {
+                    let drawer = db
+                        .get_drawer(&result.drawer_id)
+                        .map_err(db_error)?
+                        .ok_or_else(|| {
+                            ErrorData::internal_error(
+                                format!("search result missing drawer {}", result.drawer_id),
+                                None,
+                            )
+                        })?;
+                    Ok(SearchResultDto::with_signals_from_result(result, &drawer))
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
         }))
     }
 
@@ -1371,6 +1402,12 @@ mod tests {
                 wing: wing.map(str::to_string),
                 room: room.map(str::to_string),
                 top_k: Some(top_k),
+                memory_kind: None,
+                domain: None,
+                field: None,
+                tier: None,
+                status: None,
+                anchor_kind: None,
             }))
             .await
             .expect("search should succeed")

@@ -16,6 +16,16 @@ pub mod route;
 
 pub type Result<T> = std::result::Result<T, SearchError>;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchFilters {
+    pub memory_kind: Option<String>,
+    pub domain: Option<String>,
+    pub field: Option<String>,
+    pub tier: Option<String>,
+    pub status: Option<String>,
+    pub anchor_kind: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum SearchError {
     #[error("failed to embed search query")]
@@ -50,6 +60,27 @@ pub async fn search<E: Embedder + ?Sized>(
     room: Option<&str>,
     top_k: usize,
 ) -> Result<Vec<SearchResult>> {
+    search_with_filters(
+        db,
+        embedder,
+        query,
+        wing,
+        room,
+        &SearchFilters::default(),
+        top_k,
+    )
+    .await
+}
+
+pub async fn search_with_filters<E: Embedder + ?Sized>(
+    db: &Database,
+    embedder: &E,
+    query: &str,
+    wing: Option<&str>,
+    room: Option<&str>,
+    filters: &SearchFilters,
+    top_k: usize,
+) -> Result<Vec<SearchResult>> {
     if top_k == 0 {
         return Ok(Vec::new());
     }
@@ -65,7 +96,7 @@ pub async fn search<E: Embedder + ?Sized>(
         .next()
         .ok_or(SearchError::MissingQueryVector)?;
 
-    search_with_vector(db, query, &query_vector, route, top_k)
+    search_with_vector_and_filters(db, query, &query_vector, route, filters, top_k)
 }
 
 pub fn search_with_vector(
@@ -75,16 +106,40 @@ pub fn search_with_vector(
     route: RouteDecision,
     top_k: usize,
 ) -> Result<Vec<SearchResult>> {
+    search_with_vector_and_filters(
+        db,
+        query,
+        query_vector,
+        route,
+        &SearchFilters::default(),
+        top_k,
+    )
+}
+
+pub fn search_with_vector_and_filters(
+    db: &Database,
+    query: &str,
+    query_vector: &[f32],
+    route: RouteDecision,
+    filters: &SearchFilters,
+    top_k: usize,
+) -> Result<Vec<SearchResult>> {
     if top_k == 0 {
         return Ok(Vec::new());
     }
 
     // Hybrid search: vector + BM25, merged via RRF
-    let vector_results = search_by_vector(db, query_vector, route.clone(), top_k)?;
+    let vector_results =
+        search_by_vector_with_filters(db, query_vector, route.clone(), filters, top_k)?;
 
-    let fts_ids = db
-        .search_fts(query, route.wing.as_deref(), route.room.as_deref(), top_k)
-        .map_err(SearchError::KeywordSearch)?;
+    let fts_ids = search_fts_with_filters(
+        db,
+        query,
+        route.wing.as_deref(),
+        route.room.as_deref(),
+        filters,
+        top_k,
+    )?;
 
     let mut results = if fts_ids.is_empty() {
         vector_results
@@ -200,20 +255,49 @@ pub fn search_by_vector(
     route: RouteDecision,
     top_k: usize,
 ) -> Result<Vec<SearchResult>> {
+    search_by_vector_with_filters(db, query_vector, route, &SearchFilters::default(), top_k)
+}
+
+fn search_by_vector_with_filters(
+    db: &Database,
+    query_vector: &[f32],
+    route: RouteDecision,
+    filters: &SearchFilters,
+    top_k: usize,
+) -> Result<Vec<SearchResult>> {
     if top_k == 0 {
         return Ok(Vec::new());
     }
 
     let applied_wing = route.wing.as_deref();
     let applied_room = route.room.as_deref();
+    let memory_kind = filters.memory_kind.as_deref();
+    let domain = filters.domain.as_deref();
+    let field = filters.field.as_deref();
+    let tier = filters.tier.as_deref();
+    let status = filters.status.as_deref();
+    let anchor_kind = filters.anchor_kind.as_deref();
 
     let count_sql = format!(
         "SELECT COUNT(*) FROM drawers d {}",
-        build_filter_clause("d", 1, 2)
+        build_filter_clause("d", 1)
     );
     let candidate_count: i64 = db
         .conn()
-        .query_row(&count_sql, (applied_wing, applied_room), |row| row.get(0))
+        .query_row(
+            &count_sql,
+            (
+                applied_wing,
+                applied_room,
+                memory_kind,
+                domain,
+                field,
+                tier,
+                status,
+                anchor_kind,
+            ),
+            |row| row.get(0),
+        )
         .map_err(SearchError::CountCandidateDrawers)?;
     if candidate_count == 0 {
         return Ok(Vec::new());
@@ -244,9 +328,9 @@ pub fn search_by_vector(
         JOIN drawers d ON d.id = matches.id
         {}
         ORDER BY matches.distance ASC
-        LIMIT ?5
+        LIMIT ?11
         "#,
-        build_filter_clause("d", 3, 4)
+        build_filter_clause("d", 3)
     );
 
     let mut statement = db
@@ -260,6 +344,12 @@ pub fn search_by_vector(
                 total_count,
                 applied_wing,
                 applied_room,
+                memory_kind,
+                domain,
+                field,
+                tier,
+                status,
+                anchor_kind,
                 top_k,
             ),
             |row| {
@@ -283,6 +373,70 @@ pub fn search_by_vector(
         .map_err(SearchError::CollectSearchRows)?;
 
     Ok(results)
+}
+
+fn search_fts_with_filters(
+    db: &Database,
+    query: &str,
+    wing: Option<&str>,
+    room: Option<&str>,
+    filters: &SearchFilters,
+    limit: usize,
+) -> Result<Vec<(String, f64)>> {
+    let Some(match_query) = build_fts_match_query(query) else {
+        return Ok(Vec::new());
+    };
+    let limit = i64::try_from(limit).map_err(|_| SearchError::InvalidTopK)?;
+    let sql = format!(
+        r#"
+        SELECT d.id, fts.rank
+        FROM drawers_fts fts
+        JOIN drawers d ON d.rowid = fts.rowid
+        {}
+          AND drawers_fts MATCH ?1
+        ORDER BY fts.rank
+        LIMIT ?10
+        "#,
+        build_filter_clause("d", 2)
+    );
+    let mut statement = db
+        .conn()
+        .prepare(&sql)
+        .map_err(SearchError::PrepareSearch)?;
+    statement
+        .query_map(
+            (
+                match_query.as_str(),
+                wing,
+                room,
+                filters.memory_kind.as_deref(),
+                filters.domain.as_deref(),
+                filters.field.as_deref(),
+                filters.tier.as_deref(),
+                filters.status.as_deref(),
+                filters.anchor_kind.as_deref(),
+                limit,
+            ),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)),
+        )
+        .map_err(SearchError::ExecuteSearch)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(SearchError::CollectSearchRows)
+}
+
+fn build_fts_match_query(query: &str) -> Option<String> {
+    let terms = query
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>();
+
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" AND "))
+    }
 }
 
 pub fn resolve_route(

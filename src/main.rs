@@ -15,13 +15,14 @@ use mempal::core::{
     config::Config,
     db::Database,
     protocol::{DEFAULT_IDENTITY_HINT, MEMORY_PROTOCOL},
-    types::TaxonomyEntry,
+    types::{AnchorKind, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, TaxonomyEntry},
     utils::{build_triple_id, current_timestamp},
 };
 use mempal::embed::{ConfiguredEmbedderFactory, Embedder};
 use mempal::ingest::{IngestOptions, IngestStats, ingest_dir, ingest_dir_with_options};
 use mempal::mcp::MempalMcpServer;
-use mempal::search::search;
+use mempal::search::{SearchFilters, search_with_filters};
+use serde::Serialize;
 
 mod longmemeval;
 
@@ -56,6 +57,18 @@ enum Commands {
         wing: Option<String>,
         #[arg(long)]
         room: Option<String>,
+        #[arg(long)]
+        memory_kind: Option<String>,
+        #[arg(long)]
+        domain: Option<String>,
+        #[arg(long)]
+        field: Option<String>,
+        #[arg(long)]
+        tier: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        anchor_kind: Option<String>,
         #[arg(long, default_value_t = 10)]
         top_k: usize,
         #[arg(long)]
@@ -258,17 +271,33 @@ async fn run() -> Result<()> {
             query,
             wing,
             room,
+            memory_kind,
+            domain,
+            field,
+            tier,
+            status,
+            anchor_kind,
             top_k,
             json,
         } => {
             search_command(
                 &db,
                 &config,
-                &query,
-                wing.as_deref(),
-                room.as_deref(),
-                top_k,
-                json,
+                SearchCommandArgs {
+                    query: &query,
+                    wing: wing.as_deref(),
+                    room: room.as_deref(),
+                    filters: SearchFilters {
+                        memory_kind,
+                        domain,
+                        field,
+                        tier,
+                        status,
+                        anchor_kind,
+                    },
+                    top_k,
+                    json,
+                },
             )
             .await
         }
@@ -294,6 +323,15 @@ async fn run() -> Result<()> {
         | Commands::CoworkStatus { .. }
         | Commands::CoworkInstallHooks { .. } => unreachable!(),
     }
+}
+
+struct SearchCommandArgs<'a> {
+    query: &'a str,
+    wing: Option<&'a str>,
+    room: Option<&'a str>,
+    filters: SearchFilters,
+    top_k: usize,
+    json: bool,
 }
 
 async fn bench_command(config: &Config, command: BenchCommands) -> Result<()> {
@@ -457,19 +495,24 @@ fn append_ingest_audit_log(
     Ok(())
 }
 
-async fn search_command(
-    db: &Database,
-    config: &Config,
-    query: &str,
-    wing: Option<&str>,
-    room: Option<&str>,
-    top_k: usize,
-    json: bool,
-) -> Result<()> {
+async fn search_command(db: &Database, config: &Config, args: SearchCommandArgs<'_>) -> Result<()> {
     let embedder = build_embedder(config).await?;
-    let results = search(db, &*embedder, query, wing, room, top_k).await?;
+    let results = search_with_filters(
+        db,
+        &*embedder,
+        args.query,
+        args.wing,
+        args.room,
+        &args.filters,
+        args.top_k,
+    )
+    .await?;
+    let results = results
+        .into_iter()
+        .map(|result| build_cli_search_result(db, result))
+        .collect::<Result<Vec<_>>>()?;
 
-    if json {
+    if args.json {
         println!(
             "{}",
             serde_json::to_string_pretty(&results).context("failed to serialize search results")?
@@ -483,13 +526,27 @@ async fn search_command(
     }
 
     for result in results {
-        let room = result.room.unwrap_or_else(|| "default".to_string());
+        let room = result.room.clone().unwrap_or_else(|| "default".to_string());
         let source_file = result.source_file;
         println!(
             "[{:.3}] {}/{} {}",
             result.similarity, result.wing, room, result.drawer_id
         );
         println!("source: {source_file}");
+        println!(
+            "kind: {} domain: {} field: {} anchor: {} {}",
+            result.memory_kind, result.domain, result.field, result.anchor_kind, result.anchor_id
+        );
+        if let Some(parent_anchor_id) = result.parent_anchor_id.as_deref() {
+            println!("parent_anchor: {parent_anchor_id}");
+        }
+        if let Some(tier) = result.tier.as_deref() {
+            let status = result.status.as_deref().unwrap_or("unknown");
+            println!("knowledge: tier={tier} status={status}");
+        }
+        if let Some(statement) = result.statement.as_deref() {
+            println!("statement: {statement}");
+        }
         if !result.tunnel_hints.is_empty() {
             println!("tunnel: also in {}", result.tunnel_hints.join(", "));
         }
@@ -498,6 +555,113 @@ async fn search_command(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct CliSearchResult {
+    drawer_id: String,
+    content: String,
+    wing: String,
+    room: Option<String>,
+    source_file: String,
+    similarity: f32,
+    route: mempal::core::types::RouteDecision,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tunnel_hints: Vec<String>,
+    memory_kind: String,
+    domain: String,
+    field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    statement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    anchor_kind: String,
+    anchor_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_anchor_id: Option<String>,
+}
+
+fn build_cli_search_result(
+    db: &Database,
+    result: mempal::core::types::SearchResult,
+) -> Result<CliSearchResult> {
+    let drawer = db
+        .get_drawer(&result.drawer_id)
+        .with_context(|| format!("failed to load drawer {}", result.drawer_id))?
+        .ok_or_else(|| anyhow::anyhow!("search result missing drawer {}", result.drawer_id))?;
+
+    Ok(CliSearchResult {
+        drawer_id: result.drawer_id,
+        content: result.content,
+        wing: result.wing,
+        room: result.room,
+        source_file: result.source_file,
+        similarity: result.similarity,
+        route: result.route,
+        tunnel_hints: result.tunnel_hints,
+        memory_kind: memory_kind_slug(&drawer.memory_kind).to_string(),
+        domain: domain_slug(&drawer.domain).to_string(),
+        field: drawer.field,
+        statement: drawer.statement,
+        tier: drawer
+            .tier
+            .as_ref()
+            .map(knowledge_tier_slug)
+            .map(str::to_string),
+        status: drawer
+            .status
+            .as_ref()
+            .map(knowledge_status_slug)
+            .map(str::to_string),
+        anchor_kind: anchor_kind_slug(&drawer.anchor_kind).to_string(),
+        anchor_id: drawer.anchor_id,
+        parent_anchor_id: drawer.parent_anchor_id,
+    })
+}
+
+fn memory_kind_slug(value: &MemoryKind) -> &'static str {
+    match value {
+        MemoryKind::Evidence => "evidence",
+        MemoryKind::Knowledge => "knowledge",
+    }
+}
+
+fn domain_slug(value: &MemoryDomain) -> &'static str {
+    match value {
+        MemoryDomain::Project => "project",
+        MemoryDomain::Agent => "agent",
+        MemoryDomain::Skill => "skill",
+        MemoryDomain::Global => "global",
+    }
+}
+
+fn knowledge_tier_slug(value: &KnowledgeTier) -> &'static str {
+    match value {
+        KnowledgeTier::Qi => "qi",
+        KnowledgeTier::Shu => "shu",
+        KnowledgeTier::DaoRen => "dao_ren",
+        KnowledgeTier::DaoTian => "dao_tian",
+    }
+}
+
+fn knowledge_status_slug(value: &KnowledgeStatus) -> &'static str {
+    match value {
+        KnowledgeStatus::Candidate => "candidate",
+        KnowledgeStatus::Promoted => "promoted",
+        KnowledgeStatus::Canonical => "canonical",
+        KnowledgeStatus::Demoted => "demoted",
+        KnowledgeStatus::Retired => "retired",
+    }
+}
+
+fn anchor_kind_slug(value: &AnchorKind) -> &'static str {
+    match value {
+        AnchorKind::Global => "global",
+        AnchorKind::Repo => "repo",
+        AnchorKind::Worktree => "worktree",
+    }
 }
 
 fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {

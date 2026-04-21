@@ -141,6 +141,59 @@ fn init_git_repo(path: &Path) {
         .expect("git init should run");
 }
 
+fn bootstrap_drawer(
+    id: &str,
+    content: &str,
+    memory_kind: MemoryKind,
+    tier: Option<KnowledgeTier>,
+    status: Option<KnowledgeStatus>,
+    statement: Option<&str>,
+) -> Drawer {
+    Drawer {
+        id: id.to_string(),
+        content: content.to_string(),
+        wing: "mempal".to_string(),
+        room: Some("bootstrap".to_string()),
+        source_file: Some(match memory_kind {
+            MemoryKind::Evidence => format!("tests://{id}"),
+            MemoryKind::Knowledge => format!("knowledge://project/bootstrap/{id}"),
+        }),
+        source_type: SourceType::Manual,
+        added_at: "1710009999".to_string(),
+        chunk_index: Some(0),
+        importance: 2,
+        memory_kind: memory_kind.clone(),
+        domain: MemoryDomain::Project,
+        field: anchor::DEFAULT_FIELD.to_string(),
+        anchor_kind: AnchorKind::Repo,
+        anchor_id: format!("repo://{id}"),
+        parent_anchor_id: None,
+        provenance: match memory_kind {
+            MemoryKind::Evidence => Some(Provenance::Human),
+            MemoryKind::Knowledge => None,
+        },
+        statement: statement.map(ToOwned::to_owned),
+        tier,
+        status,
+        supporting_refs: if matches!(memory_kind, MemoryKind::Knowledge) {
+            vec!["drawer_ev_search_source".to_string()]
+        } else {
+            Vec::new()
+        },
+        counterexample_refs: Vec::new(),
+        teaching_refs: Vec::new(),
+        verification_refs: Vec::new(),
+        scope_constraints: None,
+        trigger_hints: None,
+    }
+}
+
+fn insert_search_fixture(db: &Database, drawer: &Drawer, vector: &[f32]) {
+    db.insert_drawer(drawer).expect("insert search drawer");
+    db.insert_vector(&drawer.id, vector)
+        .expect("insert search vector");
+}
+
 #[test]
 fn test_migration_backfills_legacy_drawers_with_bootstrap_defaults() {
     let tmp = TempDir::new().expect("tempdir");
@@ -728,4 +781,142 @@ async fn test_bootstrap_identity_ignores_ref_and_hint_order() {
         .expect("second identity request should succeed");
 
     assert_eq!(first.drawer_id, second.drawer_id);
+}
+
+#[tokio::test]
+async fn test_search_result_exposes_knowledge_metadata_without_rewriting_content() {
+    let (_tmp, db, server) = setup_mcp_server();
+    let raw_content =
+        "Raw knowledge body: preserve this exact content even when statement differs.";
+    let statement = "Promote the normalized statement, not the stored body.";
+    let drawer = bootstrap_drawer(
+        "drawer_search_knowledge",
+        raw_content,
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Shu),
+        Some(KnowledgeStatus::Promoted),
+        Some(statement),
+    );
+    insert_search_fixture(&db, &drawer, &[0.1, 0.2, 0.3]);
+
+    let response = server
+        .search_json_for_test(json!({
+            "query": "preserve exact content",
+            "wing": "mempal",
+            "room": "bootstrap",
+            "top_k": 5
+        }))
+        .await
+        .expect("search should succeed");
+
+    let result = response.results.first().expect("search result");
+    assert_eq!(result.drawer_id, drawer.id);
+    assert_eq!(result.content, raw_content);
+    assert_ne!(result.content, statement);
+    assert_eq!(result.memory_kind.as_deref(), Some("knowledge"));
+    assert_eq!(result.domain.as_deref(), Some("project"));
+    assert_eq!(result.field.as_deref(), Some(anchor::DEFAULT_FIELD));
+    assert_eq!(result.statement.as_deref(), Some(statement));
+    assert_eq!(result.tier.as_deref(), Some("shu"));
+    assert_eq!(result.status.as_deref(), Some("promoted"));
+    assert_eq!(result.anchor_kind.as_deref(), Some("repo"));
+    assert_eq!(
+        result.anchor_id.as_deref(),
+        Some("repo://drawer_search_knowledge")
+    );
+    assert_eq!(result.parent_anchor_id, None);
+}
+
+#[tokio::test]
+async fn test_search_filters_by_memory_kind_and_tier_without_rerank_changes() {
+    let (_tmp, db, server) = setup_mcp_server();
+    let evidence = bootstrap_drawer(
+        "drawer_search_evidence",
+        "alpha alpha alpha evidence body",
+        MemoryKind::Evidence,
+        None,
+        None,
+        None,
+    );
+    let knowledge_shu = bootstrap_drawer(
+        "drawer_search_knowledge_shu",
+        "alpha alpha knowledge shu body",
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Shu),
+        Some(KnowledgeStatus::Promoted),
+        Some("Knowledge shu statement"),
+    );
+    let knowledge_qi = bootstrap_drawer(
+        "drawer_search_knowledge_qi",
+        "alpha knowledge qi body",
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Qi),
+        Some(KnowledgeStatus::Candidate),
+        Some("Knowledge qi statement"),
+    );
+
+    insert_search_fixture(&db, &evidence, &[0.1, 0.2, 0.3]);
+    insert_search_fixture(&db, &knowledge_shu, &[0.2, 0.2, 0.3]);
+    insert_search_fixture(&db, &knowledge_qi, &[0.3, 0.2, 0.3]);
+
+    let unfiltered = server
+        .search_json_for_test(json!({
+            "query": "alpha",
+            "wing": "mempal",
+            "room": "bootstrap",
+            "top_k": 3
+        }))
+        .await
+        .expect("unfiltered search should succeed");
+    let knowledge_only = server
+        .search_json_for_test(json!({
+            "query": "alpha",
+            "wing": "mempal",
+            "room": "bootstrap",
+            "memory_kind": "knowledge",
+            "top_k": 3
+        }))
+        .await
+        .expect("knowledge-only search should succeed");
+    let shu_only = server
+        .search_json_for_test(json!({
+            "query": "alpha",
+            "wing": "mempal",
+            "room": "bootstrap",
+            "memory_kind": "knowledge",
+            "tier": "shu",
+            "top_k": 3
+        }))
+        .await
+        .expect("shu-only search should succeed");
+
+    let unfiltered_ids: Vec<&str> = unfiltered
+        .results
+        .iter()
+        .map(|result| result.drawer_id.as_str())
+        .collect();
+    let knowledge_only_ids: Vec<&str> = knowledge_only
+        .results
+        .iter()
+        .map(|result| result.drawer_id.as_str())
+        .collect();
+    let shu_only_ids: Vec<&str> = shu_only
+        .results
+        .iter()
+        .map(|result| result.drawer_id.as_str())
+        .collect();
+
+    assert_eq!(
+        unfiltered_ids,
+        vec![
+            "drawer_search_evidence",
+            "drawer_search_knowledge_shu",
+            "drawer_search_knowledge_qi"
+        ]
+    );
+    assert_eq!(
+        knowledge_only_ids,
+        vec!["drawer_search_knowledge_shu", "drawer_search_knowledge_qi"]
+    );
+    assert_eq!(shu_only_ids, vec!["drawer_search_knowledge_shu"]);
 }
