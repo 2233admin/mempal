@@ -144,6 +144,7 @@ fn validate_ingest_request(
                 || !counterexample_refs.is_empty()
                 || !teaching_refs.is_empty()
                 || !verification_refs.is_empty()
+                || scope_constraints.is_some()
                 || trigger_hints.is_some()
             {
                 return Err(ErrorData::invalid_params(
@@ -169,7 +170,7 @@ fn validate_ingest_request(
                 counterexample_refs: Vec::new(),
                 teaching_refs: Vec::new(),
                 verification_refs: Vec::new(),
-                scope_constraints,
+                scope_constraints: None,
                 trigger_hints: None,
             })
         }

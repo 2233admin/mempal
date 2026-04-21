@@ -370,10 +370,10 @@ async fn test_evidence_drawer_rejects_knowledge_only_fields() {
     let (_tmp, _db, server) = setup_mcp_server();
     let error = server
         .ingest_json_for_test(json!({
-            "content": "Evidence should not carry promotion state",
+            "content": "Evidence should not carry knowledge governance metadata",
             "wing": "mempal",
             "memory_kind": "evidence",
-            "tier": "qi"
+            "scope_constraints": "Task 2 only"
         }))
         .await
         .expect_err("knowledge-only fields should be rejected");
