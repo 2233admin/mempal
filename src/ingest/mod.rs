@@ -248,17 +248,17 @@ pub async fn ingest_file_with_options<E: Embedder + ?Sized>(
         })?;
 
     for ((chunk_index, chunk, drawer_id), vector) in pending.into_iter().zip(vectors.into_iter()) {
-        let drawer = Drawer {
-            id: drawer_id.clone(),
-            content: chunk.to_string(),
-            wing: wing.to_string(),
-            room: Some(resolved_room.clone()),
-            source_file: Some(source_file.clone()),
-            source_type: source_type_for(format),
-            added_at: current_timestamp(),
-            chunk_index: Some(chunk_index as i64),
-            importance: 0,
-        };
+        let drawer = Drawer::new_bootstrap_evidence(
+            drawer_id.clone(),
+            chunk.to_string(),
+            wing.to_string(),
+            Some(resolved_room.clone()),
+            Some(source_file.clone()),
+            source_type_for(format),
+            current_timestamp(),
+            Some(chunk_index as i64),
+            0,
+        );
 
         db.insert_drawer(&drawer)
             .map_err(|source| IngestError::InsertDrawer {

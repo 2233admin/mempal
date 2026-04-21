@@ -2,13 +2,44 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Row, params};
 use serde_json::Value;
 use thiserror::Error;
 
-use super::types::{Drawer, SourceType, TaxonomyEntry, Triple, TripleStats};
+use super::anchor;
+use super::types::{
+    AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
+    SourceType, TaxonomyEntry, Triple, TripleStats,
+};
 
-const CURRENT_SCHEMA_VERSION: u32 = 4;
+const CURRENT_SCHEMA_VERSION: u32 = 5;
+const DRAWER_SELECT_COLUMNS: &str = r#"
+    id,
+    content,
+    wing,
+    room,
+    source_file,
+    source_type,
+    added_at,
+    chunk_index,
+    COALESCE(importance, 0) as importance,
+    memory_kind,
+    domain,
+    field,
+    anchor_kind,
+    anchor_id,
+    parent_anchor_id,
+    provenance,
+    statement,
+    tier,
+    status,
+    supporting_refs,
+    counterexample_refs,
+    teaching_refs,
+    verification_refs,
+    scope_constraints,
+    trigger_hints
+"#;
 
 const V1_SCHEMA_SQL: &str = r#"
 PRAGMA foreign_keys = ON;
@@ -75,6 +106,10 @@ pub enum DbError {
     Json(#[from] serde_json::Error),
     #[error("invalid source_type stored in database: {0}")]
     InvalidSourceType(String),
+    #[error("invalid {kind} stored in database: {value}")]
+    InvalidEnumValue { kind: &'static str, value: String },
+    #[error("invalid drawer metadata: {0}")]
+    InvalidDrawerMetadata(String),
     #[error("failed to register sqlite-vec auto extension: {0}")]
     RegisterVec(String),
     #[error("database schema version {current} is newer than supported version {supported}")]
@@ -118,6 +153,9 @@ impl Database {
     }
 
     pub fn insert_drawer(&self, drawer: &Drawer) -> Result<(), DbError> {
+        anchor::validate_anchor_domain(&drawer.domain, &drawer.anchor_kind)
+            .map_err(|message| DbError::InvalidDrawerMetadata(message.to_string()))?;
+
         self.conn.execute(
             r#"
             INSERT INTO drawers (
@@ -129,20 +167,52 @@ impl Database {
                 source_type,
                 added_at,
                 chunk_index,
-                importance
+                importance,
+                memory_kind,
+                domain,
+                field,
+                anchor_kind,
+                anchor_id,
+                parent_anchor_id,
+                provenance,
+                statement,
+                tier,
+                status,
+                supporting_refs,
+                counterexample_refs,
+                teaching_refs,
+                verification_refs,
+                scope_constraints,
+                trigger_hints
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
             "#,
             params![
-                drawer.id,
-                drawer.content,
-                drawer.wing,
-                drawer.room,
-                drawer.source_file,
+                drawer.id.as_str(),
+                drawer.content.as_str(),
+                drawer.wing.as_str(),
+                drawer.room.as_deref(),
+                drawer.source_file.as_deref(),
                 source_type_as_str(&drawer.source_type),
-                drawer.added_at,
+                drawer.added_at.as_str(),
                 drawer.chunk_index,
                 drawer.importance,
+                memory_kind_as_str(&drawer.memory_kind),
+                memory_domain_as_str(&drawer.domain),
+                drawer.field.as_str(),
+                anchor_kind_as_str(&drawer.anchor_kind),
+                drawer.anchor_id.as_str(),
+                drawer.parent_anchor_id.as_deref(),
+                drawer.provenance.as_ref().map(provenance_as_str),
+                drawer.statement.as_deref(),
+                drawer.tier.as_ref().map(knowledge_tier_as_str),
+                drawer.status.as_ref().map(knowledge_status_as_str),
+                encode_json(&drawer.supporting_refs)?,
+                encode_json(&drawer.counterexample_refs)?,
+                encode_json(&drawer.teaching_refs)?,
+                encode_json(&drawer.verification_refs)?,
+                drawer.scope_constraints.as_deref(),
+                encode_optional_json(drawer.trigger_hints.as_ref())?,
             ],
         )?;
 
@@ -202,54 +272,22 @@ impl Database {
     pub fn top_drawers(&self, limit: usize) -> Result<Vec<Drawer>, DbError> {
         let limit = i64::try_from(limit)
             .map_err(|_| rusqlite::Error::InvalidParameterName("limit".to_string()))?;
-        let mut statement = self.conn.prepare(
+        let mut statement = self.conn.prepare(&format!(
             r#"
-            SELECT id, content, wing, room, source_file, source_type, added_at, chunk_index,
-                   COALESCE(importance, 0) as importance
+            SELECT {DRAWER_SELECT_COLUMNS}
             FROM drawers
             WHERE deleted_at IS NULL
             ORDER BY importance DESC, CAST(added_at AS INTEGER) DESC, id DESC
             LIMIT ?1
             "#,
-        )?;
+        ))?;
         let rows = statement.query_map([limit], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, Option<i64>>(7)?,
-                row.get::<_, i32>(8)?,
-            ))
+            drawer_from_row(row).map_err(row_decode_error)
         })?;
 
         let mut drawers = Vec::new();
         for row in rows {
-            let (
-                id,
-                content,
-                wing,
-                room,
-                source_file,
-                source_type,
-                added_at,
-                chunk_index,
-                importance,
-            ) = row?;
-            drawers.push(Drawer {
-                id,
-                content,
-                wing,
-                room,
-                source_file,
-                source_type: source_type_from_str(&source_type)?,
-                added_at,
-                chunk_index,
-                importance,
-            });
+            drawers.push(row?);
         }
 
         Ok(drawers)
@@ -331,53 +369,19 @@ impl Database {
     }
 
     pub fn get_drawer(&self, drawer_id: &str) -> Result<Option<Drawer>, DbError> {
-        let mut statement = self.conn.prepare(
+        let mut statement = self.conn.prepare(&format!(
             r#"
-            SELECT id, content, wing, room, source_file, source_type, added_at, chunk_index,
-                   COALESCE(importance, 0) as importance
+            SELECT {DRAWER_SELECT_COLUMNS}
             FROM drawers
             WHERE id = ?1 AND deleted_at IS NULL
             "#,
-        )?;
+        ))?;
         let mut rows = statement.query_map([drawer_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, Option<i64>>(7)?,
-                row.get::<_, i32>(8)?,
-            ))
+            drawer_from_row(row).map_err(row_decode_error)
         })?;
 
         match rows.next() {
-            Some(row) => {
-                let (
-                    id,
-                    content,
-                    wing,
-                    room,
-                    source_file,
-                    source_type,
-                    added_at,
-                    chunk_index,
-                    importance,
-                ) = row?;
-                Ok(Some(Drawer {
-                    id,
-                    content,
-                    wing,
-                    room,
-                    source_file,
-                    source_type: source_type_from_str(&source_type)?,
-                    added_at,
-                    chunk_index,
-                    importance,
-                }))
-            }
+            Some(row) => Ok(Some(row?)),
             None => Ok(None),
         }
     }
@@ -765,6 +769,50 @@ END;
 -- entry is already gone.
 "#;
 
+const V4_MIGRATION_SQL: &str = r#"
+ALTER TABLE drawers ADD COLUMN importance INTEGER DEFAULT 0;
+"#;
+
+const V5_MIGRATION_SQL: &str = r#"
+ALTER TABLE drawers ADD COLUMN memory_kind TEXT NOT NULL CHECK(memory_kind IN ('evidence', 'knowledge')) DEFAULT 'evidence';
+ALTER TABLE drawers ADD COLUMN domain TEXT NOT NULL CHECK(domain IN ('project', 'agent', 'skill', 'global')) DEFAULT 'project';
+ALTER TABLE drawers ADD COLUMN field TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE drawers ADD COLUMN anchor_kind TEXT NOT NULL CHECK(anchor_kind IN ('global', 'repo', 'worktree')) DEFAULT 'repo';
+ALTER TABLE drawers ADD COLUMN anchor_id TEXT NOT NULL DEFAULT 'repo://legacy';
+ALTER TABLE drawers ADD COLUMN parent_anchor_id TEXT;
+ALTER TABLE drawers ADD COLUMN provenance TEXT CHECK(provenance IN ('runtime', 'research', 'human'));
+ALTER TABLE drawers ADD COLUMN statement TEXT;
+ALTER TABLE drawers ADD COLUMN tier TEXT CHECK(tier IN ('qi', 'shu', 'dao_ren', 'dao_tian'));
+ALTER TABLE drawers ADD COLUMN status TEXT CHECK(status IN ('candidate', 'promoted', 'canonical', 'demoted', 'retired'));
+ALTER TABLE drawers ADD COLUMN supporting_refs TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE drawers ADD COLUMN counterexample_refs TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE drawers ADD COLUMN teaching_refs TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE drawers ADD COLUMN verification_refs TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE drawers ADD COLUMN scope_constraints TEXT;
+ALTER TABLE drawers ADD COLUMN trigger_hints TEXT;
+
+UPDATE drawers
+SET memory_kind = 'evidence',
+    domain = 'project',
+    field = 'general',
+    anchor_kind = 'repo',
+    anchor_id = 'repo://legacy',
+    parent_anchor_id = NULL,
+    provenance = CASE source_type
+        WHEN 'project' THEN 'research'
+        WHEN 'conversation' THEN 'human'
+        WHEN 'manual' THEN 'human'
+        ELSE NULL
+    END
+WHERE memory_kind = 'evidence'
+  AND domain = 'project'
+  AND field = 'general'
+  AND anchor_kind = 'repo'
+  AND anchor_id = 'repo://legacy'
+  AND parent_anchor_id IS NULL
+  AND provenance IS NULL;
+"#;
+
 fn migrations() -> &'static [Migration] {
     static MIGRATIONS: &[Migration] = &[
         Migration {
@@ -783,13 +831,13 @@ fn migrations() -> &'static [Migration] {
             version: 4,
             sql: V4_MIGRATION_SQL,
         },
+        Migration {
+            version: 5,
+            sql: V5_MIGRATION_SQL,
+        },
     ];
     MIGRATIONS
 }
-
-const V4_MIGRATION_SQL: &str = r#"
-ALTER TABLE drawers ADD COLUMN importance INTEGER DEFAULT 0;
-"#;
 
 struct Migration {
     version: u32,
@@ -829,6 +877,231 @@ fn source_type_from_str(source_type: &str) -> Result<SourceType, DbError> {
         "manual" => Ok(SourceType::Manual),
         other => Err(DbError::InvalidSourceType(other.to_string())),
     }
+}
+
+fn memory_kind_as_str(memory_kind: &MemoryKind) -> &'static str {
+    match memory_kind {
+        MemoryKind::Evidence => "evidence",
+        MemoryKind::Knowledge => "knowledge",
+    }
+}
+
+fn memory_kind_from_str(memory_kind: &str) -> Result<MemoryKind, DbError> {
+    match memory_kind {
+        "evidence" => Ok(MemoryKind::Evidence),
+        "knowledge" => Ok(MemoryKind::Knowledge),
+        other => Err(DbError::InvalidEnumValue {
+            kind: "memory_kind",
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn memory_domain_as_str(domain: &MemoryDomain) -> &'static str {
+    match domain {
+        MemoryDomain::Project => "project",
+        MemoryDomain::Agent => "agent",
+        MemoryDomain::Skill => "skill",
+        MemoryDomain::Global => "global",
+    }
+}
+
+fn memory_domain_from_str(domain: &str) -> Result<MemoryDomain, DbError> {
+    match domain {
+        "project" => Ok(MemoryDomain::Project),
+        "agent" => Ok(MemoryDomain::Agent),
+        "skill" => Ok(MemoryDomain::Skill),
+        "global" => Ok(MemoryDomain::Global),
+        other => Err(DbError::InvalidEnumValue {
+            kind: "domain",
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn anchor_kind_as_str(anchor_kind: &AnchorKind) -> &'static str {
+    match anchor_kind {
+        AnchorKind::Global => "global",
+        AnchorKind::Repo => "repo",
+        AnchorKind::Worktree => "worktree",
+    }
+}
+
+fn anchor_kind_from_str(anchor_kind: &str) -> Result<AnchorKind, DbError> {
+    match anchor_kind {
+        "global" => Ok(AnchorKind::Global),
+        "repo" => Ok(AnchorKind::Repo),
+        "worktree" => Ok(AnchorKind::Worktree),
+        other => Err(DbError::InvalidEnumValue {
+            kind: "anchor_kind",
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn provenance_as_str(provenance: &Provenance) -> &'static str {
+    match provenance {
+        Provenance::Runtime => "runtime",
+        Provenance::Research => "research",
+        Provenance::Human => "human",
+    }
+}
+
+fn provenance_from_str(provenance: &str) -> Result<Provenance, DbError> {
+    match provenance {
+        "runtime" => Ok(Provenance::Runtime),
+        "research" => Ok(Provenance::Research),
+        "human" => Ok(Provenance::Human),
+        other => Err(DbError::InvalidEnumValue {
+            kind: "provenance",
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn knowledge_tier_as_str(tier: &KnowledgeTier) -> &'static str {
+    match tier {
+        KnowledgeTier::Qi => "qi",
+        KnowledgeTier::Shu => "shu",
+        KnowledgeTier::DaoRen => "dao_ren",
+        KnowledgeTier::DaoTian => "dao_tian",
+    }
+}
+
+fn knowledge_tier_from_str(tier: &str) -> Result<KnowledgeTier, DbError> {
+    match tier {
+        "qi" => Ok(KnowledgeTier::Qi),
+        "shu" => Ok(KnowledgeTier::Shu),
+        "dao_ren" => Ok(KnowledgeTier::DaoRen),
+        "dao_tian" => Ok(KnowledgeTier::DaoTian),
+        other => Err(DbError::InvalidEnumValue {
+            kind: "tier",
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn knowledge_status_as_str(status: &KnowledgeStatus) -> &'static str {
+    match status {
+        KnowledgeStatus::Candidate => "candidate",
+        KnowledgeStatus::Promoted => "promoted",
+        KnowledgeStatus::Canonical => "canonical",
+        KnowledgeStatus::Demoted => "demoted",
+        KnowledgeStatus::Retired => "retired",
+    }
+}
+
+fn knowledge_status_from_str(status: &str) -> Result<KnowledgeStatus, DbError> {
+    match status {
+        "candidate" => Ok(KnowledgeStatus::Candidate),
+        "promoted" => Ok(KnowledgeStatus::Promoted),
+        "canonical" => Ok(KnowledgeStatus::Canonical),
+        "demoted" => Ok(KnowledgeStatus::Demoted),
+        "retired" => Ok(KnowledgeStatus::Retired),
+        other => Err(DbError::InvalidEnumValue {
+            kind: "status",
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn encode_json<T: serde::Serialize>(value: &T) -> Result<String, DbError> {
+    Ok(serde_json::to_string(value)?)
+}
+
+fn encode_optional_json<T: serde::Serialize>(value: Option<&T>) -> Result<Option<String>, DbError> {
+    value.map(encode_json).transpose()
+}
+
+fn parse_string_list(raw: Option<&str>) -> Result<Vec<String>, DbError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let value: Value = serde_json::from_str(raw)?;
+    let refs = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str())
+        .map(ToOwned::to_owned)
+        .collect();
+    Ok(refs)
+}
+
+fn parse_optional_json<T>(raw: Option<&str>) -> Result<Option<T>, DbError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    raw.map(serde_json::from_str)
+        .transpose()
+        .map_err(DbError::from)
+}
+
+fn row_decode_error(error: DbError) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+}
+
+fn drawer_from_row(row: &Row<'_>) -> Result<Drawer, DbError> {
+    let source_type = source_type_from_str(&row.get::<_, String>(5)?)?;
+    let memory_kind = memory_kind_from_str(&row.get::<_, String>(9)?)?;
+    let domain = memory_domain_from_str(&row.get::<_, String>(10)?)?;
+    let field = row.get::<_, String>(11)?;
+    let anchor_kind = anchor_kind_from_str(&row.get::<_, String>(12)?)?;
+    let anchor_id = row.get::<_, String>(13)?;
+    let parent_anchor_id = row.get::<_, Option<String>>(14)?;
+    let provenance = row
+        .get::<_, Option<String>>(15)?
+        .as_deref()
+        .map(provenance_from_str)
+        .transpose()?;
+    let statement = row.get::<_, Option<String>>(16)?;
+    let tier = row
+        .get::<_, Option<String>>(17)?
+        .as_deref()
+        .map(knowledge_tier_from_str)
+        .transpose()?;
+    let status = row
+        .get::<_, Option<String>>(18)?
+        .as_deref()
+        .map(knowledge_status_from_str)
+        .transpose()?;
+    let supporting_refs = parse_string_list(row.get::<_, Option<String>>(19)?.as_deref())?;
+    let counterexample_refs = parse_string_list(row.get::<_, Option<String>>(20)?.as_deref())?;
+    let teaching_refs = parse_string_list(row.get::<_, Option<String>>(21)?.as_deref())?;
+    let verification_refs = parse_string_list(row.get::<_, Option<String>>(22)?.as_deref())?;
+    let scope_constraints = row.get::<_, Option<String>>(23)?;
+    let trigger_hints = parse_optional_json(row.get::<_, Option<String>>(24)?.as_deref())?;
+
+    anchor::validate_anchor_domain(&domain, &anchor_kind)
+        .map_err(|message| DbError::InvalidDrawerMetadata(message.to_string()))?;
+
+    Ok(Drawer {
+        id: row.get(0)?,
+        content: row.get(1)?,
+        wing: row.get(2)?,
+        room: row.get(3)?,
+        source_file: row.get(4)?,
+        source_type,
+        added_at: row.get(6)?,
+        chunk_index: row.get(7)?,
+        importance: row.get(8)?,
+        memory_kind,
+        domain,
+        field,
+        anchor_kind,
+        anchor_id,
+        parent_anchor_id,
+        provenance,
+        statement,
+        tier,
+        status,
+        supporting_refs,
+        counterexample_refs,
+        teaching_refs,
+        verification_refs,
+        scope_constraints,
+        trigger_hints,
+    })
 }
 
 fn parse_keywords(raw: Option<&str>) -> Result<Vec<String>, DbError> {

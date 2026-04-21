@@ -181,17 +181,17 @@ async fn ingest_handler(
 
     if !db.drawer_exists(&drawer_id).map_err(internal_error)? {
         let source_file = source_file_or_synthetic(&drawer_id, request.source.as_deref());
-        db.insert_drawer(&Drawer {
-            id: drawer_id.clone(),
-            content: request.content,
-            wing: request.wing,
-            room: request.room,
-            source_file: Some(source_file),
-            source_type: SourceType::Manual,
-            added_at: current_timestamp(),
-            chunk_index: Some(0),
-            importance: 0,
-        })
+        db.insert_drawer(&Drawer::new_bootstrap_evidence(
+            drawer_id.clone(),
+            request.content,
+            request.wing,
+            request.room,
+            Some(source_file),
+            SourceType::Manual,
+            current_timestamp(),
+            Some(0),
+            0,
+        ))
         .map_err(internal_error)?;
         db.insert_vector(&drawer_id, &vector)
             .map_err(internal_error)?;
