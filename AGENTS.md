@@ -62,6 +62,7 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 | `specs/p11-diary-daily-rollup.spec.md` | `agent-diary` 天粒度 upsert drawer，防 chatty agent 爆炸 |
 | `specs/p11-chunk-neighbors.spec.md` | search 可选返回命中 chunk 前后邻居 |
 | `specs/p11-transcript-noise-strip.spec.md` | Claude JSONL / Codex rollout verbatim-safe 噪声剥离（依赖 P10 normalize-version） |
+| `specs/p12-mind-model-bootstrap.spec.md` | Stage-1 mind-model bootstrap：在现有 `drawers` 上引入 `evidence` / `knowledge` typed drawers、`dao/shu/qi` 最小治理字段和 `global/repo/worktree` anchor metadata |
 
 ### 实现计划
 
