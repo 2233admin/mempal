@@ -76,6 +76,31 @@ pub struct IngestRequest {
     /// Importance ranking (0-5). Higher values appear first in wake-up context.
     /// Default 0. Use 3-5 for key decisions, architecture choices, and lessons learned.
     pub importance: Option<i32>,
+
+    pub memory_kind: Option<String>,
+    pub domain: Option<String>,
+    pub field: Option<String>,
+    pub provenance: Option<String>,
+    pub statement: Option<String>,
+    pub tier: Option<String>,
+    pub status: Option<String>,
+    pub supporting_refs: Option<Vec<String>>,
+    pub counterexample_refs: Option<Vec<String>>,
+    pub teaching_refs: Option<Vec<String>>,
+    pub verification_refs: Option<Vec<String>>,
+    pub scope_constraints: Option<String>,
+    pub trigger_hints: Option<TriggerHintsDto>,
+    pub anchor_kind: Option<String>,
+    pub anchor_id: Option<String>,
+    pub parent_anchor_id: Option<String>,
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct TriggerHintsDto {
+    pub intent_tags: Vec<String>,
+    pub workflow_bias: Vec<String>,
+    pub tool_needs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

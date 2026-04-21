@@ -1,10 +1,17 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::core::{
+    anchor::{self, DerivedAnchor},
     db::Database,
-    types::{BootstrapEvidenceArgs, Drawer, SourceType, Triple},
-    utils::{build_drawer_id, build_triple_id, current_timestamp, source_file_or_synthetic},
+    types::{
+        AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
+        SourceType, TriggerHints, Triple,
+    },
+    utils::{
+        build_drawer_id, build_triple_id, current_timestamp, knowledge_source_file,
+        source_file_or_synthetic,
+    },
 };
 use crate::cowork::{PeekError, PeekRequest as CoworkPeekRequest, Tool, peek_partner};
 use crate::embed::EmbedderFactory;
@@ -16,13 +23,14 @@ use rmcp::{
     model::{ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
+use serde_json::Value;
 
 use super::tools::{
     CoworkPushRequest, CoworkPushResponse, DeleteRequest, DeleteResponse, DuplicateWarning,
     FactCheckRequest, FactCheckResponse, IngestRequest, IngestResponse, KgRequest, KgResponse,
     KgStatsDto, PeekMessageDto, PeekPartnerRequest, PeekPartnerResponse, ScopeCount, SearchRequest,
     SearchResponse, SearchResultDto, StatusResponse, TaxonomyEntryDto, TaxonomyRequest,
-    TaxonomyResponse, TripleDto, TunnelDto, TunnelsResponse,
+    TaxonomyResponse, TriggerHintsDto, TripleDto, TunnelDto, TunnelsResponse,
 };
 
 #[derive(Clone)]
@@ -65,6 +73,341 @@ impl MempalMcpServer {
             ErrorData::internal_error(format!("failed to open database: {error}"), None)
         })
     }
+
+    pub async fn ingest_json_for_test(
+        &self,
+        value: Value,
+    ) -> std::result::Result<IngestResponse, ErrorData> {
+        let request = serde_json::from_value(value)
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+        self.mempal_ingest(Parameters(request))
+            .await
+            .map(|response| response.0)
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedIngestMetadata {
+    memory_kind: MemoryKind,
+    domain: MemoryDomain,
+    field: String,
+    anchor_kind: AnchorKind,
+    anchor_id: String,
+    parent_anchor_id: Option<String>,
+    provenance: Option<Provenance>,
+    statement: Option<String>,
+    tier: Option<KnowledgeTier>,
+    status: Option<KnowledgeStatus>,
+    supporting_refs: Vec<String>,
+    counterexample_refs: Vec<String>,
+    teaching_refs: Vec<String>,
+    verification_refs: Vec<String>,
+    scope_constraints: Option<String>,
+    trigger_hints: Option<TriggerHints>,
+}
+
+fn validate_ingest_request(
+    request: &IngestRequest,
+    source_type: &SourceType,
+) -> std::result::Result<ValidatedIngestMetadata, ErrorData> {
+    let memory_kind =
+        parse_memory_kind(request.memory_kind.as_deref())?.unwrap_or(MemoryKind::Evidence);
+    let domain = parse_domain(request.domain.as_deref())?.unwrap_or(MemoryDomain::Project);
+    let field = trim_to_option(request.field.as_deref())
+        .unwrap_or(anchor::DEFAULT_FIELD)
+        .to_string();
+    let statement = trim_to_owned(request.statement.as_deref());
+    let tier = parse_tier(request.tier.as_deref())?;
+    let status = parse_status(request.status.as_deref())?;
+    let provenance = parse_provenance(request.provenance.as_deref())?;
+    let supporting_refs = normalize_refs(request.supporting_refs.as_deref());
+    let counterexample_refs = normalize_refs(request.counterexample_refs.as_deref());
+    let teaching_refs = normalize_refs(request.teaching_refs.as_deref());
+    let verification_refs = normalize_refs(request.verification_refs.as_deref());
+    let scope_constraints = trim_to_owned(request.scope_constraints.as_deref());
+    let trigger_hints = request.trigger_hints.as_ref().map(trigger_hints_from_dto);
+
+    let derived_anchor = validate_anchor_metadata(request, &domain, source_type)?;
+
+    match memory_kind {
+        MemoryKind::Evidence => {
+            if provenance.is_some() && !matches!(provenance, Some(Provenance::Human)) {
+                return Err(ErrorData::invalid_params(
+                    "evidence provenance must be omitted or use the default source-derived value",
+                    None,
+                ));
+            }
+            if statement.is_some()
+                || tier.is_some()
+                || status.is_some()
+                || !supporting_refs.is_empty()
+                || !counterexample_refs.is_empty()
+                || !teaching_refs.is_empty()
+                || !verification_refs.is_empty()
+                || trigger_hints.is_some()
+            {
+                return Err(ErrorData::invalid_params(
+                    "evidence drawer does not allow knowledge-only fields",
+                    None,
+                ));
+            }
+
+            Ok(ValidatedIngestMetadata {
+                memory_kind,
+                domain,
+                field,
+                anchor_kind: derived_anchor.anchor_kind,
+                anchor_id: derived_anchor.anchor_id,
+                parent_anchor_id: derived_anchor.parent_anchor_id,
+                provenance: Some(
+                    provenance.unwrap_or_else(|| anchor::bootstrap_provenance(source_type)),
+                ),
+                statement: None,
+                tier: None,
+                status: None,
+                supporting_refs: Vec::new(),
+                counterexample_refs: Vec::new(),
+                teaching_refs: Vec::new(),
+                verification_refs: Vec::new(),
+                scope_constraints,
+                trigger_hints: None,
+            })
+        }
+        MemoryKind::Knowledge => {
+            if provenance.is_some() {
+                return Err(ErrorData::invalid_params(
+                    "knowledge drawer does not allow provenance",
+                    None,
+                ));
+            }
+
+            let statement = statement.ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "knowledge drawer requires statement and supporting_refs",
+                    None,
+                )
+            })?;
+            let tier = tier.ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "knowledge drawer requires tier, status, statement, and supporting_refs",
+                    None,
+                )
+            })?;
+            let status = status.ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "knowledge drawer requires tier, status, statement, and supporting_refs",
+                    None,
+                )
+            })?;
+
+            if supporting_refs.is_empty() {
+                return Err(ErrorData::invalid_params(
+                    "knowledge drawer requires statement and supporting_refs",
+                    None,
+                ));
+            }
+
+            validate_tier_status(&tier, &status)?;
+
+            Ok(ValidatedIngestMetadata {
+                memory_kind,
+                domain,
+                field,
+                anchor_kind: derived_anchor.anchor_kind,
+                anchor_id: derived_anchor.anchor_id,
+                parent_anchor_id: derived_anchor.parent_anchor_id,
+                provenance: None,
+                statement: Some(statement),
+                tier: Some(tier),
+                status: Some(status),
+                supporting_refs,
+                counterexample_refs,
+                teaching_refs,
+                verification_refs,
+                scope_constraints,
+                trigger_hints,
+            })
+        }
+    }
+}
+
+fn validate_anchor_metadata(
+    request: &IngestRequest,
+    domain: &MemoryDomain,
+    source_type: &SourceType,
+) -> std::result::Result<DerivedAnchor, ErrorData> {
+    let explicit_kind = trim_to_option(request.anchor_kind.as_deref());
+    let explicit_id = trim_to_option(request.anchor_id.as_deref());
+
+    let anchor = match (explicit_kind, explicit_id) {
+        (Some(kind), Some(anchor_id)) => DerivedAnchor {
+            anchor_kind: parse_anchor_kind(Some(kind))?.expect("explicit kind"),
+            anchor_id: anchor_id.to_string(),
+            parent_anchor_id: trim_to_owned(request.parent_anchor_id.as_deref()),
+        },
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(ErrorData::invalid_params(
+                "anchor_kind and anchor_id must be provided together",
+                None,
+            ));
+        }
+        (None, None) => {
+            if let Some(cwd) = trim_to_option(request.cwd.as_deref()) {
+                anchor::derive_anchor_from_cwd(Some(Path::new(cwd))).map_err(anchor_error)?
+            } else {
+                let defaults = anchor::bootstrap_defaults(source_type);
+                DerivedAnchor {
+                    anchor_kind: defaults.anchor_kind,
+                    anchor_id: defaults.anchor_id,
+                    parent_anchor_id: defaults.parent_anchor_id,
+                }
+            }
+        }
+    };
+
+    anchor::validate_anchor_domain(domain, &anchor.anchor_kind)
+        .map_err(|message| ErrorData::invalid_params(message.to_string(), None))?;
+    Ok(anchor)
+}
+
+fn validate_tier_status(
+    tier: &KnowledgeTier,
+    status: &KnowledgeStatus,
+) -> std::result::Result<(), ErrorData> {
+    let allowed = match tier {
+        KnowledgeTier::DaoTian => &[KnowledgeStatus::Canonical, KnowledgeStatus::Demoted][..],
+        KnowledgeTier::DaoRen => &[
+            KnowledgeStatus::Candidate,
+            KnowledgeStatus::Promoted,
+            KnowledgeStatus::Demoted,
+            KnowledgeStatus::Retired,
+        ][..],
+        KnowledgeTier::Shu => &[
+            KnowledgeStatus::Promoted,
+            KnowledgeStatus::Demoted,
+            KnowledgeStatus::Retired,
+        ][..],
+        KnowledgeTier::Qi => &[
+            KnowledgeStatus::Candidate,
+            KnowledgeStatus::Promoted,
+            KnowledgeStatus::Demoted,
+            KnowledgeStatus::Retired,
+        ][..],
+    };
+
+    if allowed.contains(status) {
+        return Ok(());
+    }
+
+    let message = match tier {
+        KnowledgeTier::DaoTian => "dao_tian only allows canonical or demoted",
+        KnowledgeTier::DaoRen => "dao_ren only allows candidate, promoted, demoted, or retired",
+        KnowledgeTier::Shu => "shu only allows promoted, demoted, or retired",
+        KnowledgeTier::Qi => "qi only allows candidate, promoted, demoted, or retired",
+    };
+    Err(ErrorData::invalid_params(message, None))
+}
+
+fn parse_memory_kind(value: Option<&str>) -> std::result::Result<Option<MemoryKind>, ErrorData> {
+    parse_enum(value, "memory_kind", |normalized| match normalized {
+        "evidence" => Some(MemoryKind::Evidence),
+        "knowledge" => Some(MemoryKind::Knowledge),
+        _ => None,
+    })
+}
+
+fn parse_domain(value: Option<&str>) -> std::result::Result<Option<MemoryDomain>, ErrorData> {
+    parse_enum(value, "domain", |normalized| match normalized {
+        "project" => Some(MemoryDomain::Project),
+        "agent" => Some(MemoryDomain::Agent),
+        "skill" => Some(MemoryDomain::Skill),
+        "global" => Some(MemoryDomain::Global),
+        _ => None,
+    })
+}
+
+fn parse_anchor_kind(value: Option<&str>) -> std::result::Result<Option<AnchorKind>, ErrorData> {
+    parse_enum(value, "anchor_kind", |normalized| match normalized {
+        "global" => Some(AnchorKind::Global),
+        "repo" => Some(AnchorKind::Repo),
+        "worktree" => Some(AnchorKind::Worktree),
+        _ => None,
+    })
+}
+
+fn parse_provenance(value: Option<&str>) -> std::result::Result<Option<Provenance>, ErrorData> {
+    parse_enum(value, "provenance", |normalized| match normalized {
+        "runtime" => Some(Provenance::Runtime),
+        "research" => Some(Provenance::Research),
+        "human" => Some(Provenance::Human),
+        _ => None,
+    })
+}
+
+fn parse_tier(value: Option<&str>) -> std::result::Result<Option<KnowledgeTier>, ErrorData> {
+    parse_enum(value, "tier", |normalized| match normalized {
+        "qi" => Some(KnowledgeTier::Qi),
+        "shu" => Some(KnowledgeTier::Shu),
+        "dao_ren" => Some(KnowledgeTier::DaoRen),
+        "dao_tian" => Some(KnowledgeTier::DaoTian),
+        _ => None,
+    })
+}
+
+fn parse_status(value: Option<&str>) -> std::result::Result<Option<KnowledgeStatus>, ErrorData> {
+    parse_enum(value, "status", |normalized| match normalized {
+        "candidate" => Some(KnowledgeStatus::Candidate),
+        "promoted" => Some(KnowledgeStatus::Promoted),
+        "canonical" => Some(KnowledgeStatus::Canonical),
+        "demoted" => Some(KnowledgeStatus::Demoted),
+        "retired" => Some(KnowledgeStatus::Retired),
+        _ => None,
+    })
+}
+
+fn parse_enum<T, F>(
+    value: Option<&str>,
+    field: &'static str,
+    parser: F,
+) -> std::result::Result<Option<T>, ErrorData>
+where
+    F: Fn(&str) -> Option<T>,
+{
+    let Some(value) = trim_to_option(value) else {
+        return Ok(None);
+    };
+
+    parser(value)
+        .map(Some)
+        .ok_or_else(|| ErrorData::invalid_params(format!("invalid {field}: {value}"), None))
+}
+
+fn normalize_refs(values: Option<&[String]>) -> Vec<String> {
+    values
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|value| trim_to_owned(Some(value.as_str())))
+        .collect()
+}
+
+fn trigger_hints_from_dto(dto: &TriggerHintsDto) -> TriggerHints {
+    TriggerHints {
+        intent_tags: normalize_refs(Some(&dto.intent_tags)),
+        workflow_bias: normalize_refs(Some(&dto.workflow_bias)),
+        tool_needs: normalize_refs(Some(&dto.tool_needs)),
+    }
+}
+
+fn trim_to_option(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn trim_to_owned(value: Option<&str>) -> Option<String> {
+    trim_to_option(value).map(ToOwned::to_owned)
+}
+
+fn anchor_error(error: anchor::AnchorError) -> ErrorData {
+    ErrorData::invalid_params(error.to_string(), None)
 }
 
 #[tool_router(router = tool_router)]
@@ -154,6 +497,7 @@ impl MempalMcpServer {
     ) -> std::result::Result<Json<IngestResponse>, ErrorData> {
         let room = request.room.as_deref();
         let drawer_id = build_drawer_id(&request.wing, room, &request.content);
+        let metadata = validate_ingest_request(&request, &SourceType::Manual)?;
 
         if request.dry_run.unwrap_or(false) {
             return Ok(Json(IngestResponse {
@@ -196,8 +540,21 @@ impl MempalMcpServer {
         let duplicate_warning = check_semantic_duplicate(&db, &vector, &request.content);
 
         if !db.drawer_exists(&drawer_id).map_err(db_error)? {
-            let source_file = source_file_or_synthetic(&drawer_id, request.source.as_deref());
-            db.insert_drawer(&Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
+            let source_file = match metadata.memory_kind {
+                MemoryKind::Evidence => {
+                    source_file_or_synthetic(&drawer_id, request.source.as_deref())
+                }
+                MemoryKind::Knowledge => knowledge_source_file(
+                    &metadata.domain,
+                    &metadata.field,
+                    metadata.tier.as_ref().expect("knowledge tier validated"),
+                    metadata
+                        .statement
+                        .as_deref()
+                        .expect("knowledge statement validated"),
+                ),
+            };
+            let drawer = Drawer {
                 id: drawer_id.clone(),
                 content: request.content,
                 wing: request.wing,
@@ -207,8 +564,24 @@ impl MempalMcpServer {
                 added_at: current_timestamp(),
                 chunk_index: Some(0),
                 importance: request.importance.unwrap_or(0),
-            }))
-            .map_err(db_error)?;
+                memory_kind: metadata.memory_kind,
+                domain: metadata.domain,
+                field: metadata.field,
+                anchor_kind: metadata.anchor_kind,
+                anchor_id: metadata.anchor_id,
+                parent_anchor_id: metadata.parent_anchor_id,
+                provenance: metadata.provenance,
+                statement: metadata.statement,
+                tier: metadata.tier,
+                status: metadata.status,
+                supporting_refs: metadata.supporting_refs,
+                counterexample_refs: metadata.counterexample_refs,
+                teaching_refs: metadata.teaching_refs,
+                verification_refs: metadata.verification_refs,
+                scope_constraints: metadata.scope_constraints,
+                trigger_hints: metadata.trigger_hints,
+            };
+            db.insert_drawer(&drawer).map_err(db_error)?;
             db.insert_vector(&drawer_id, &vector).map_err(db_error)?;
         }
 
@@ -1060,6 +1433,23 @@ mod tests {
             source: None,
             importance: None,
             dry_run: None,
+            memory_kind: None,
+            domain: None,
+            field: None,
+            provenance: None,
+            statement: None,
+            tier: None,
+            status: None,
+            supporting_refs: None,
+            counterexample_refs: None,
+            teaching_refs: None,
+            verification_refs: None,
+            scope_constraints: None,
+            trigger_hints: None,
+            anchor_kind: None,
+            anchor_id: None,
+            parent_anchor_id: None,
+            cwd: None,
         };
 
         let server_a = Arc::clone(&server);

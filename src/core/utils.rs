@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
-use super::types::TaxonomyEntry;
+use super::types::{KnowledgeTier, MemoryDomain, TaxonomyEntry};
 
 pub const DEFAULT_ROOM: &str = "default";
 
@@ -47,6 +47,21 @@ pub fn current_timestamp() -> String {
 
 pub fn synthetic_source_file(drawer_id: &str) -> String {
     format!("mempal://drawer/{drawer_id}")
+}
+
+pub fn knowledge_source_file(
+    domain: &MemoryDomain,
+    field: &str,
+    tier: &KnowledgeTier,
+    statement: &str,
+) -> String {
+    format!(
+        "knowledge://{}/{}/{}/{}",
+        enum_slug(memory_domain_as_str(domain)),
+        slugify_uri_component(field),
+        enum_slug(knowledge_tier_as_str(tier)),
+        slugify_uri_component(statement)
+    )
 }
 
 pub fn source_file_or_synthetic(drawer_id: &str, source_file: Option<&str>) -> String {
@@ -111,6 +126,50 @@ fn sanitize_component_prefix(value: &str, max_len: usize) -> String {
         "x".to_string()
     } else {
         prefix
+    }
+}
+
+pub fn slugify_uri_component(value: &str) -> String {
+    let mut slug = String::new();
+    let mut prev_dash = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            slug.push('-');
+            prev_dash = true;
+        }
+    }
+
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        "x".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn enum_slug(value: &str) -> String {
+    value.replace('_', "-")
+}
+
+fn memory_domain_as_str(domain: &MemoryDomain) -> &'static str {
+    match domain {
+        MemoryDomain::Project => "project",
+        MemoryDomain::Agent => "agent",
+        MemoryDomain::Skill => "skill",
+        MemoryDomain::Global => "global",
+    }
+}
+
+fn knowledge_tier_as_str(tier: &KnowledgeTier) -> &'static str {
+    match tier {
+        KnowledgeTier::Qi => "qi",
+        KnowledgeTier::Shu => "shu",
+        KnowledgeTier::DaoRen => "dao_ren",
+        KnowledgeTier::DaoTian => "dao_tian",
     }
 }
 

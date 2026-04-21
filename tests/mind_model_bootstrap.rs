@@ -1,11 +1,17 @@
 //! Integration tests for P12 stage-1 mind-model bootstrap schema/core work.
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use mempal::core::types::{
     AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
     SourceType, TriggerHints,
 };
 use mempal::core::{anchor, db::Database};
+use mempal::embed::{Embedder, EmbedderFactory};
+use mempal::mcp::MempalMcpServer;
 use rusqlite::Connection;
+use serde_json::json;
 use tempfile::TempDir;
 
 fn create_v4_db(path: &std::path::Path) {
@@ -79,6 +85,51 @@ fn new_db() -> (TempDir, Database) {
     let db_path = tmp.path().join("palace.db");
     let db = Database::open(&db_path).expect("open db");
     (tmp, db)
+}
+
+struct StubEmbedderFactory {
+    vector: Vec<f32>,
+}
+
+struct StubEmbedder {
+    vector: Vec<f32>,
+}
+
+#[async_trait]
+impl EmbedderFactory for StubEmbedderFactory {
+    async fn build(&self) -> mempal::embed::Result<Box<dyn Embedder>> {
+        Ok(Box::new(StubEmbedder {
+            vector: self.vector.clone(),
+        }))
+    }
+}
+
+#[async_trait]
+impl Embedder for StubEmbedder {
+    async fn embed(&self, texts: &[&str]) -> mempal::embed::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| self.vector.clone()).collect())
+    }
+
+    fn dimensions(&self) -> usize {
+        self.vector.len()
+    }
+
+    fn name(&self) -> &str {
+        "stub"
+    }
+}
+
+fn setup_mcp_server() -> (TempDir, Database, MempalMcpServer) {
+    let tmp = TempDir::new().expect("tempdir");
+    let db_path = tmp.path().join("palace.db");
+    let db = Database::open(&db_path).expect("open db");
+    let server = MempalMcpServer::new_with_factory(
+        db_path,
+        Arc::new(StubEmbedderFactory {
+            vector: vec![0.1, 0.2, 0.3],
+        }),
+    );
+    (tmp, db, server)
 }
 
 #[test]
@@ -282,6 +333,106 @@ fn test_read_path_rejects_non_array_or_non_string_list_payloads() {
     let message = error.to_string();
     assert!(
         message.contains("JSON") || message.contains("list"),
+        "unexpected error: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_ingest_defaults_to_evidence_drawer_bootstrap_metadata() {
+    let (_tmp, db, server) = setup_mcp_server();
+    let response = server
+        .ingest_json_for_test(json!({
+            "content": "Bootstrap evidence body",
+            "wing": "mempal",
+            "room": "bootstrap",
+            "source": "notes://bootstrap",
+            "importance": 2
+        }))
+        .await
+        .expect("ingest should succeed");
+
+    let drawer = db
+        .get_drawer(&response.drawer_id)
+        .expect("load drawer")
+        .expect("drawer exists");
+
+    assert_eq!(drawer.memory_kind, MemoryKind::Evidence);
+    assert_eq!(drawer.domain, MemoryDomain::Project);
+    assert_eq!(drawer.field, "general");
+    assert_eq!(drawer.provenance, Some(Provenance::Human));
+    assert_eq!(drawer.statement, None);
+    assert_eq!(drawer.tier, None);
+    assert_eq!(drawer.status, None);
+}
+
+#[tokio::test]
+async fn test_evidence_drawer_rejects_knowledge_only_fields() {
+    let (_tmp, _db, server) = setup_mcp_server();
+    let error = server
+        .ingest_json_for_test(json!({
+            "content": "Evidence should not carry promotion state",
+            "wing": "mempal",
+            "memory_kind": "evidence",
+            "tier": "qi"
+        }))
+        .await
+        .expect_err("knowledge-only fields should be rejected");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("evidence") && message.contains("knowledge-only"),
+        "unexpected error: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_knowledge_drawer_requires_statement_and_supporting_refs() {
+    let (_tmp, _db, server) = setup_mcp_server();
+    let error = server
+        .ingest_json_for_test(json!({
+            "content": "Knowledge body without the bootstrap metadata contract",
+            "wing": "mempal",
+            "memory_kind": "knowledge",
+            "domain": "skill",
+            "field": "debugging",
+            "tier": "shu",
+            "status": "promoted"
+        }))
+        .await
+        .expect_err("knowledge drawers should require statement and supporting refs");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("knowledge") && message.contains("statement"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains("supporting_refs"),
+        "unexpected error: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_dao_tian_rejects_noncanonical_status() {
+    let (_tmp, _db, server) = setup_mcp_server();
+    let error = server
+        .ingest_json_for_test(json!({
+            "content": "Canonical epistemic policy",
+            "wing": "mempal",
+            "memory_kind": "knowledge",
+            "statement": "Evidence precedes assertion.",
+            "tier": "dao_tian",
+            "status": "candidate",
+            "supporting_refs": ["drawer_ev_001"]
+        }))
+        .await
+        .expect_err("dao_tian candidate should be rejected");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("dao_tian")
+            && message.contains("canonical")
+            && message.contains("demoted"),
         "unexpected error: {message}"
     );
 }
