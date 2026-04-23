@@ -16,7 +16,7 @@ use crate::core::{
 use crate::cowork::{PeekError, PeekRequest as CoworkPeekRequest, Tool, peek_partner};
 use crate::embed::EmbedderFactory;
 use crate::ingest::normalize::CURRENT_NORMALIZE_VERSION;
-use crate::search::{SearchFilters, resolve_route, search_with_vector_and_filters};
+use crate::search::{SearchFilters, SearchOptions, resolve_route, search_with_vector_options};
 use anyhow::Context;
 use rmcp::{
     ErrorData, Json, ServerHandler, ServiceExt,
@@ -556,12 +556,15 @@ impl MempalMcpServer {
             request.room.as_deref(),
         )
         .map_err(|error| ErrorData::internal_error(format!("routing failed: {error}"), None))?;
-        let results = search_with_vector_and_filters(
+        let results = search_with_vector_options(
             &db,
             &request.query,
             &query_vector,
             route,
-            &filters,
+            SearchOptions {
+                filters,
+                with_neighbors: request.with_neighbors.unwrap_or(false),
+            },
             request.top_k.unwrap_or(10),
         )
         .map_err(|error| ErrorData::internal_error(format!("search failed: {error}"), None))?;
@@ -1473,6 +1476,7 @@ mod tests {
                 tier: None,
                 status: None,
                 anchor_kind: None,
+                with_neighbors: None,
             }))
             .await
             .expect("search should succeed")

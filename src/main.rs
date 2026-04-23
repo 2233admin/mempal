@@ -27,7 +27,7 @@ use mempal::ingest::{
     reindex::{ReindexMode, ReindexOptions, ReindexReport, reindex_sources},
 };
 use mempal::mcp::MempalMcpServer;
-use mempal::search::{SearchFilters, search_with_filters};
+use mempal::search::{SearchFilters, SearchOptions, search_with_options};
 use serde::Serialize;
 
 mod longmemeval;
@@ -81,6 +81,8 @@ enum Commands {
         top_k: usize,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        with_neighbors: bool,
     },
     WakeUp {
         #[arg(long)]
@@ -325,6 +327,7 @@ async fn run() -> Result<()> {
             anchor_kind,
             top_k,
             json,
+            with_neighbors,
         } => {
             search_command(
                 &db,
@@ -343,6 +346,7 @@ async fn run() -> Result<()> {
                     },
                     top_k,
                     json,
+                    with_neighbors,
                 },
             )
             .await
@@ -382,6 +386,7 @@ struct SearchCommandArgs<'a> {
     filters: SearchFilters,
     top_k: usize,
     json: bool,
+    with_neighbors: bool,
 }
 
 async fn bench_command(config: &Config, command: BenchCommands) -> Result<()> {
@@ -568,13 +573,16 @@ fn append_ingest_audit_log(
 
 async fn search_command(db: &Database, config: &Config, args: SearchCommandArgs<'_>) -> Result<()> {
     let embedder = build_embedder(config).await?;
-    let results = search_with_filters(
+    let results = search_with_options(
         db,
         &*embedder,
         args.query,
         args.wing,
         args.room,
-        &args.filters,
+        SearchOptions {
+            filters: args.filters,
+            with_neighbors: args.with_neighbors,
+        },
         args.top_k,
     )
     .await?;
@@ -621,6 +629,14 @@ async fn search_command(db: &Database, config: &Config, args: SearchCommandArgs<
         if !result.tunnel_hints.is_empty() {
             println!("tunnel: also in {}", result.tunnel_hints.join(", "));
         }
+        if let Some(neighbors) = result.neighbors.as_ref() {
+            if let Some(prev) = neighbors.prev.as_ref() {
+                println!("prev[{}]: {}", prev.chunk_index, prev.content);
+            }
+            if let Some(next) = neighbors.next.as_ref() {
+                println!("next[{}]: {}", next.chunk_index, next.content);
+            }
+        }
         println!("{}", result.content);
         println!();
     }
@@ -639,6 +655,8 @@ struct CliSearchResult {
     route: mempal::core::types::RouteDecision,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tunnel_hints: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    neighbors: Option<mempal::core::types::ChunkNeighbors>,
     memory_kind: String,
     domain: String,
     field: String,
@@ -664,6 +682,7 @@ fn build_cli_search_result(result: mempal::core::types::SearchResult) -> CliSear
         similarity: result.similarity,
         route: result.route,
         tunnel_hints: result.tunnel_hints,
+        neighbors: result.neighbors,
         memory_kind: memory_kind_slug(&result.memory_kind).to_string(),
         domain: domain_slug(&result.domain).to_string(),
         field: result.field,

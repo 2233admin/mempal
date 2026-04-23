@@ -68,6 +68,28 @@ fn insert_chunk(
     source_file: &str,
     chunk_index: i64,
 ) {
+    insert_chunk_with_vector(
+        db,
+        id,
+        content,
+        wing,
+        room,
+        source_file,
+        chunk_index,
+        &vector(),
+    );
+}
+
+fn insert_chunk_with_vector(
+    db: &Database,
+    id: &str,
+    content: &str,
+    wing: &str,
+    room: Option<&str>,
+    source_file: &str,
+    chunk_index: i64,
+    vector: &[f32],
+) {
     db.insert_drawer(&Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
         id: id.to_string(),
         content: content.to_string(),
@@ -80,13 +102,17 @@ fn insert_chunk(
         importance: 0,
     }))
     .expect("insert chunk drawer");
-    db.insert_vector(id, &vector()).expect("insert vector");
+    db.insert_vector(id, vector).expect("insert vector");
 }
 
 fn insert_doc_chunks(db: &Database, count: usize) {
+    insert_doc_chunks_with_vector(db, count, &vector());
+}
+
+fn insert_doc_chunks_with_vector(db: &Database, count: usize, vector: &[f32]) {
     for index in 0..count {
         let needle = if index == 2 { " needle" } else { "" };
-        insert_chunk(
+        insert_chunk_with_vector(
             db,
             &format!("drawer_{index}"),
             &format!("chunk {index}{needle}"),
@@ -94,6 +120,7 @@ fn insert_doc_chunks(db: &Database, count: usize) {
             Some("docs"),
             "doc.md",
             index as i64,
+            vector,
         );
     }
 }
@@ -316,7 +343,7 @@ async fn test_new_ingest_writes_chunk_index_sequentially() {
 #[tokio::test]
 async fn test_cli_search_with_neighbors_json() {
     let (tmp, db) = setup_cli_home();
-    insert_doc_chunks(&db, 5);
+    insert_doc_chunks_with_vector(&db, 5, &vec![0.1; 384]);
     let results = run_cli_search_json(tmp.path(), "needle", &["--with-neighbors"]);
     let hit = results
         .iter()

@@ -1,6 +1,6 @@
 use crate::core::types::{
-    AnchorKind, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, RouteDecision,
-    SearchResult, TaxonomyEntry, TunnelEndpoint,
+    AnchorKind, ChunkNeighbors, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind,
+    NeighborChunk, RouteDecision, SearchResult, TaxonomyEntry, TunnelEndpoint,
 };
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,9 @@ pub struct SearchRequest {
 
     /// Optional anchor kind filter (`global`, `repo`, `worktree`).
     pub anchor_kind: Option<String>,
+
+    /// If true and top_k <= 10, include previous/next chunks from the same source.
+    pub with_neighbors: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -63,6 +66,8 @@ pub struct SearchResultDto {
     /// Other wings sharing this room (tunnel cross-references).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tunnel_hints: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neighbors: Option<ChunkNeighborsDto>,
     /// 3-4 letter entity codes derived from AAAK analysis.
     pub entities: Vec<String>,
     /// Topic keywords derived from AAAK analysis. May be empty.
@@ -86,6 +91,21 @@ pub struct SearchResultDto {
     pub anchor_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_anchor_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ChunkNeighborsDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev: Option<NeighborChunkDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<NeighborChunkDto>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct NeighborChunkDto {
+    pub drawer_id: String,
+    pub content: String,
+    pub chunk_index: u32,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -436,6 +456,7 @@ impl SearchResultDto {
             similarity: value.similarity,
             route: value.route.into(),
             tunnel_hints: value.tunnel_hints,
+            neighbors: value.neighbors.map(ChunkNeighborsDto::from),
             entities: signals.entities,
             topics: signals.topics,
             flags: signals.flags,
@@ -458,6 +479,25 @@ impl SearchResultDto {
             anchor_kind: anchor_kind_slug(&value.anchor_kind).to_string(),
             anchor_id: value.anchor_id,
             parent_anchor_id: value.parent_anchor_id,
+        }
+    }
+}
+
+impl From<ChunkNeighbors> for ChunkNeighborsDto {
+    fn from(value: ChunkNeighbors) -> Self {
+        Self {
+            prev: value.prev.map(NeighborChunkDto::from),
+            next: value.next.map(NeighborChunkDto::from),
+        }
+    }
+}
+
+impl From<NeighborChunk> for NeighborChunkDto {
+    fn from(value: NeighborChunk) -> Self {
+        Self {
+            drawer_id: value.drawer_id,
+            content: value.content,
+            chunk_index: value.chunk_index,
         }
     }
 }
