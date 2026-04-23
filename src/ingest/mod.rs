@@ -3,6 +3,7 @@
 pub mod chunk;
 pub mod detect;
 pub mod lock;
+pub mod noise;
 pub mod normalize;
 pub mod reindex;
 
