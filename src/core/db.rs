@@ -10,11 +10,12 @@ use thiserror::Error;
 use super::anchor;
 use super::types::{
     AnchorKind, Drawer, ExplicitTunnel, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind,
-    Provenance, SourceType, TaxonomyEntry, Triple, TripleStats, TunnelEndpoint, TunnelFollowResult,
+    Provenance, ReindexSource, SourceType, TaxonomyEntry, Triple, TripleStats, TunnelEndpoint,
+    TunnelFollowResult,
 };
 use super::utils::{build_tunnel_id, current_timestamp, format_tunnel_endpoint};
 
-const CURRENT_SCHEMA_VERSION: u32 = 6;
+const CURRENT_SCHEMA_VERSION: u32 = 7;
 const DRAWER_SELECT_COLUMNS: &str = r#"
     id,
     content,
@@ -24,6 +25,7 @@ const DRAWER_SELECT_COLUMNS: &str = r#"
     source_type,
     added_at,
     chunk_index,
+    normalize_version,
     COALESCE(importance, 0) as importance,
     memory_kind,
     domain,
@@ -171,6 +173,7 @@ impl Database {
                 source_type,
                 added_at,
                 chunk_index,
+                normalize_version,
                 importance,
                 memory_kind,
                 domain,
@@ -189,7 +192,7 @@ impl Database {
                 scope_constraints,
                 trigger_hints
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
             "#,
             params![
                 drawer.id.as_str(),
@@ -200,6 +203,7 @@ impl Database {
                 source_type_as_str(&drawer.source_type),
                 drawer.added_at.as_str(),
                 drawer.chunk_index,
+                i64::from(drawer.normalize_version),
                 drawer.importance,
                 memory_kind_as_str(&drawer.memory_kind),
                 memory_domain_as_str(&drawer.domain),
@@ -342,6 +346,144 @@ impl Database {
             [],
             |row| row.get(0),
         )?)
+    }
+
+    pub fn stale_drawer_count(&self, current_normalize_version: u32) -> Result<i64, DbError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM drawers WHERE deleted_at IS NULL AND normalize_version < ?1",
+            [i64::from(current_normalize_version)],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn drawer_count_by_normalize_version(&self) -> Result<Vec<(u32, i64)>, DbError> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT normalize_version, COUNT(*)
+            FROM drawers
+            WHERE deleted_at IS NULL
+            GROUP BY normalize_version
+            ORDER BY normalize_version
+            "#,
+        )?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn reindex_sources_stale(
+        &self,
+        current_normalize_version: u32,
+    ) -> Result<Vec<ReindexSource>, DbError> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT source_file, wing, room, COUNT(*)
+            FROM drawers
+            WHERE deleted_at IS NULL AND normalize_version < ?1
+            GROUP BY source_file, wing, room
+            ORDER BY source_file, wing, room
+            "#,
+        )?;
+        let rows = statement
+            .query_map(
+                [i64::from(current_normalize_version)],
+                reindex_source_from_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn reindex_sources_force(&self) -> Result<Vec<ReindexSource>, DbError> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT source_file, wing, room, COUNT(*)
+            FROM drawers
+            WHERE deleted_at IS NULL
+            GROUP BY source_file, wing, room
+            ORDER BY source_file, wing, room
+            "#,
+        )?;
+        let rows = statement
+            .query_map([], reindex_source_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn replace_active_source_drawers(
+        &self,
+        source_file: &str,
+        wing: &str,
+        room: Option<&str>,
+    ) -> Result<u64, DbError> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT rowid, id, content
+            FROM drawers
+            WHERE deleted_at IS NULL
+              AND source_file = ?1
+              AND wing = ?2
+              AND ((?3 IS NULL AND room IS NULL) OR room = ?3)
+            ORDER BY rowid
+            "#,
+        )?;
+        let rows = statement
+            .query_map((source_file, wing, room), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        self.conn.execute_batch("BEGIN IMMEDIATE;")?;
+        let result = (|| -> Result<u64, DbError> {
+            let fts_exists = self.table_exists("drawers_fts")?;
+            let vectors_exist = self.table_exists("drawer_vectors")?;
+
+            for (rowid, id, content) in &rows {
+                if fts_exists {
+                    self.conn.execute(
+                        "INSERT INTO drawers_fts(drawers_fts, rowid, content) VALUES ('delete', ?1, ?2)",
+                        params![rowid, content],
+                    )?;
+                }
+                if vectors_exist {
+                    self.conn
+                        .execute("DELETE FROM drawer_vectors WHERE id = ?1", [id])?;
+                }
+                self.conn
+                    .execute("DELETE FROM drawers WHERE rowid = ?1", [rowid])?;
+            }
+
+            Ok(rows.len() as u64)
+        })();
+
+        match result {
+            Ok(count) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(count)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                Err(error)
+            }
+        }
+    }
+
+    fn table_exists(&self, table_name: &str) -> Result<bool, DbError> {
+        let exists = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?1)",
+            [table_name],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(exists == 1)
     }
 
     pub fn taxonomy_count(&self) -> Result<i64, DbError> {
@@ -966,6 +1108,16 @@ fn explicit_tunnel_from_row(row: &Row<'_>) -> rusqlite::Result<ExplicitTunnel> {
     })
 }
 
+fn reindex_source_from_row(row: &Row<'_>) -> rusqlite::Result<ReindexSource> {
+    let drawer_count = row.get::<_, i64>(3)?;
+    Ok(ReindexSource {
+        source_file: row.get(0)?,
+        wing: row.get(1)?,
+        room: row.get(2)?,
+        drawer_count: drawer_count as u64,
+    })
+}
+
 const V2_MIGRATION_SQL: &str = r#"
 ALTER TABLE drawers ADD COLUMN deleted_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_drawers_deleted_at ON drawers(deleted_at);
@@ -1064,6 +1216,14 @@ CREATE INDEX IF NOT EXISTS idx_tunnels_right
     WHERE deleted_at IS NULL;
 "#;
 
+const V7_MIGRATION_SQL: &str = r#"
+ALTER TABLE drawers ADD COLUMN normalize_version INTEGER NOT NULL DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS idx_drawers_normalize_version
+    ON drawers(normalize_version)
+    WHERE deleted_at IS NULL;
+"#;
+
 fn migrations() -> &'static [Migration] {
     static MIGRATIONS: &[Migration] = &[
         Migration {
@@ -1089,6 +1249,10 @@ fn migrations() -> &'static [Migration] {
         Migration {
             version: 6,
             sql: V6_MIGRATION_SQL,
+        },
+        Migration {
+            version: 7,
+            sql: V7_MIGRATION_SQL,
         },
     ];
     MIGRATIONS
@@ -1290,34 +1454,34 @@ fn row_decode_error(error: DbError) -> rusqlite::Error {
 
 fn drawer_from_row(row: &Row<'_>) -> Result<Drawer, DbError> {
     let source_type = source_type_from_str(&row.get::<_, String>(5)?)?;
-    let memory_kind = memory_kind_from_str(&row.get::<_, String>(9)?)?;
-    let domain = memory_domain_from_str(&row.get::<_, String>(10)?)?;
-    let field = row.get::<_, String>(11)?;
-    let anchor_kind = anchor_kind_from_str(&row.get::<_, String>(12)?)?;
-    let anchor_id = row.get::<_, String>(13)?;
-    let parent_anchor_id = row.get::<_, Option<String>>(14)?;
+    let memory_kind = memory_kind_from_str(&row.get::<_, String>(10)?)?;
+    let domain = memory_domain_from_str(&row.get::<_, String>(11)?)?;
+    let field = row.get::<_, String>(12)?;
+    let anchor_kind = anchor_kind_from_str(&row.get::<_, String>(13)?)?;
+    let anchor_id = row.get::<_, String>(14)?;
+    let parent_anchor_id = row.get::<_, Option<String>>(15)?;
     let provenance = row
-        .get::<_, Option<String>>(15)?
+        .get::<_, Option<String>>(16)?
         .as_deref()
         .map(provenance_from_str)
         .transpose()?;
-    let statement = row.get::<_, Option<String>>(16)?;
+    let statement = row.get::<_, Option<String>>(17)?;
     let tier = row
-        .get::<_, Option<String>>(17)?
+        .get::<_, Option<String>>(18)?
         .as_deref()
         .map(knowledge_tier_from_str)
         .transpose()?;
     let status = row
-        .get::<_, Option<String>>(18)?
+        .get::<_, Option<String>>(19)?
         .as_deref()
         .map(knowledge_status_from_str)
         .transpose()?;
-    let supporting_refs = parse_string_list(row.get::<_, Option<String>>(19)?.as_deref())?;
-    let counterexample_refs = parse_string_list(row.get::<_, Option<String>>(20)?.as_deref())?;
-    let teaching_refs = parse_string_list(row.get::<_, Option<String>>(21)?.as_deref())?;
-    let verification_refs = parse_string_list(row.get::<_, Option<String>>(22)?.as_deref())?;
-    let scope_constraints = row.get::<_, Option<String>>(23)?;
-    let trigger_hints = parse_optional_json(row.get::<_, Option<String>>(24)?.as_deref())?;
+    let supporting_refs = parse_string_list(row.get::<_, Option<String>>(20)?.as_deref())?;
+    let counterexample_refs = parse_string_list(row.get::<_, Option<String>>(21)?.as_deref())?;
+    let teaching_refs = parse_string_list(row.get::<_, Option<String>>(22)?.as_deref())?;
+    let verification_refs = parse_string_list(row.get::<_, Option<String>>(23)?.as_deref())?;
+    let scope_constraints = row.get::<_, Option<String>>(24)?;
+    let trigger_hints = parse_optional_json(row.get::<_, Option<String>>(25)?.as_deref())?;
 
     anchor::validate_anchor_domain(&domain, &anchor_kind)
         .map_err(|message| DbError::InvalidDrawerMetadata(message.to_string()))?;
@@ -1331,7 +1495,8 @@ fn drawer_from_row(row: &Row<'_>) -> Result<Drawer, DbError> {
         source_type,
         added_at: row.get(6)?,
         chunk_index: row.get(7)?,
-        importance: row.get(8)?,
+        normalize_version: row.get(8)?,
+        importance: row.get(9)?,
         memory_kind,
         domain,
         field,

@@ -203,7 +203,7 @@ fn test_schema_v5_to_v6_migration_preserves_data() {
 
     let db = Database::open(&db_path).expect("migrate v5 db");
 
-    assert_eq!(db.schema_version().expect("schema version"), 6);
+    assert_eq!(db.schema_version().expect("schema version"), 7);
     assert_eq!(db.drawer_count().expect("drawer count"), 2);
     assert_eq!(db.triple_count().expect("triple count"), 1);
     let tunnels_count: i64 = db
@@ -211,6 +211,15 @@ fn test_schema_v5_to_v6_migration_preserves_data() {
         .query_row("SELECT COUNT(*) FROM tunnels", [], |row| row.get(0))
         .expect("tunnels table should exist");
     assert_eq!(tunnels_count, 0);
+    let normalize_version_count: i64 = db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM drawers WHERE normalize_version = 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("normalize_version should exist");
+    assert_eq!(normalize_version_count, 2);
 }
 
 #[test]

@@ -412,6 +412,7 @@ fn bootstrap_drawer(
         source_type: SourceType::Manual,
         added_at: "1710009999".to_string(),
         chunk_index: Some(0),
+        normalize_version: 1,
         importance: 2,
         memory_kind: memory_kind.clone(),
         domain: MemoryDomain::Project,
@@ -544,7 +545,7 @@ fn test_migration_backfills_legacy_drawers_with_bootstrap_defaults() {
     }
 
     let db = Database::open(&db_path).expect("migrate db to latest");
-    assert_eq!(db.schema_version().expect("schema version"), 6);
+    assert_eq!(db.schema_version().expect("schema version"), 7);
 
     let drawer = db
         .get_drawer("drawer_legacy_001")
@@ -616,6 +617,7 @@ fn test_insert_load_roundtrip_preserves_json_metadata_and_read_paths() {
         source_type: SourceType::Manual,
         added_at: "1710002000".to_string(),
         chunk_index: Some(0),
+        normalize_version: 1,
         importance: 3,
         memory_kind: MemoryKind::Knowledge,
         domain: MemoryDomain::Project,

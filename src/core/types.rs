@@ -112,6 +112,14 @@ pub struct TunnelFollowResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReindexSource {
+    pub source_file: Option<String>,
+    pub wing: String,
+    pub room: Option<String>,
+    pub drawer_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Drawer {
     pub id: String,
     pub content: String,
@@ -121,6 +129,8 @@ pub struct Drawer {
     pub source_type: SourceType,
     pub added_at: String,
     pub chunk_index: Option<i64>,
+    #[serde(default = "default_normalize_version")]
+    pub normalize_version: u32,
     /// Importance ranking (0-5). Higher = more important for wake-up context.
     #[serde(default)]
     pub importance: i32,
@@ -171,6 +181,7 @@ impl Drawer {
             source_type: args.source_type,
             added_at: args.added_at,
             chunk_index: args.chunk_index,
+            normalize_version: default_normalize_version(),
             importance: args.importance,
             memory_kind: MemoryKind::Evidence,
             domain: MemoryDomain::Project,
@@ -190,6 +201,10 @@ impl Drawer {
             trigger_hints: None,
         }
     }
+}
+
+fn default_normalize_version() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

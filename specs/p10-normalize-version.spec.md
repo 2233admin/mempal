@@ -38,7 +38,7 @@ mempalace 的方案：每个 drawer row 存一个 `normalize_version`，当 `CUR
 - `src/core/db.rs`（migration v6→v7；`stale_drawer_count()` 查询；`drawer_count_by_normalize_version()`；insert 路径带入新列）
 - `src/ingest/normalize.rs`（pub const `CURRENT_NORMALIZE_VERSION: u32 = 1`）
 - `src/ingest/mod.rs`（insert 时带 CURRENT_NORMALIZE_VERSION）
-- `src/cli.rs`（reindex --stale / --force / --dry-run 子命令 flag）
+- `src/main.rs`（reindex --stale / --force / --dry-run 子命令 flag）
 - `src/mcp/tools.rs`（`StatusResponse` 加两个字段）
 - `src/mcp/server.rs`（`mempal_status` handler 填新字段）
 - `tests/normalize_version.rs`（新增）

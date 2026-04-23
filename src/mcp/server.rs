@@ -645,6 +645,7 @@ impl MempalMcpServer {
                 source_type: SourceType::Manual,
                 added_at: current_timestamp(),
                 chunk_index: Some(0),
+                normalize_version: 1,
                 importance: request.importance.unwrap_or(0),
                 memory_kind: metadata.memory_kind,
                 domain: metadata.domain,
