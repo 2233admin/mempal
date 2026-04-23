@@ -551,7 +551,7 @@ impl Database {
               AND chunk_index IN (?4, ?5)
             ORDER BY chunk_index, id
             "#;
-        let mut statement = self.conn.prepare(&sql)?;
+        let mut statement = self.conn.prepare(sql)?;
         let mut rows = statement.query(params![source_file, wing, room, prev_index, next_index])?;
         let mut neighbors = ChunkNeighbors {
             prev: None,

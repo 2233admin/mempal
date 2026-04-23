@@ -18,6 +18,15 @@ struct StubEmbedder;
 
 struct StubEmbedderFactory;
 
+struct ChunkSeed<'a> {
+    id: &'a str,
+    content: &'a str,
+    wing: &'a str,
+    room: Option<&'a str>,
+    source_file: &'a str,
+    chunk_index: i64,
+}
+
 #[async_trait::async_trait]
 impl EmbedderFactory for StubEmbedderFactory {
     async fn build(&self) -> mempal::embed::Result<Box<dyn Embedder>> {
@@ -70,39 +79,32 @@ fn insert_chunk(
 ) {
     insert_chunk_with_vector(
         db,
-        id,
-        content,
-        wing,
-        room,
-        source_file,
-        chunk_index,
+        ChunkSeed {
+            id,
+            content,
+            wing,
+            room,
+            source_file,
+            chunk_index,
+        },
         &vector(),
     );
 }
 
-fn insert_chunk_with_vector(
-    db: &Database,
-    id: &str,
-    content: &str,
-    wing: &str,
-    room: Option<&str>,
-    source_file: &str,
-    chunk_index: i64,
-    vector: &[f32],
-) {
+fn insert_chunk_with_vector(db: &Database, seed: ChunkSeed<'_>, vector: &[f32]) {
     db.insert_drawer(&Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
-        id: id.to_string(),
-        content: content.to_string(),
-        wing: wing.to_string(),
-        room: room.map(str::to_string),
-        source_file: Some(source_file.to_string()),
+        id: seed.id.to_string(),
+        content: seed.content.to_string(),
+        wing: seed.wing.to_string(),
+        room: seed.room.map(str::to_string),
+        source_file: Some(seed.source_file.to_string()),
         source_type: SourceType::Project,
-        added_at: format!("171000000{chunk_index}"),
-        chunk_index: Some(chunk_index),
+        added_at: format!("171000000{}", seed.chunk_index),
+        chunk_index: Some(seed.chunk_index),
         importance: 0,
     }))
     .expect("insert chunk drawer");
-    db.insert_vector(id, vector).expect("insert vector");
+    db.insert_vector(seed.id, vector).expect("insert vector");
 }
 
 fn insert_doc_chunks(db: &Database, count: usize) {
@@ -114,12 +116,14 @@ fn insert_doc_chunks_with_vector(db: &Database, count: usize, vector: &[f32]) {
         let needle = if index == 2 { " needle" } else { "" };
         insert_chunk_with_vector(
             db,
-            &format!("drawer_{index}"),
-            &format!("chunk {index}{needle}"),
-            "mempal",
-            Some("docs"),
-            "doc.md",
-            index as i64,
+            ChunkSeed {
+                id: &format!("drawer_{index}"),
+                content: &format!("chunk {index}{needle}"),
+                wing: "mempal",
+                room: Some("docs"),
+                source_file: "doc.md",
+                chunk_index: index as i64,
+            },
             vector,
         );
     }

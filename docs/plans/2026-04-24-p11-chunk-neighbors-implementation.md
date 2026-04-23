@@ -1,6 +1,6 @@
 # P11 Chunk Neighbors Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add opt-in previous/next chunk context to search results without changing ranking or default response shape.
 
@@ -51,7 +51,7 @@
 - Modify: `specs/p11-chunk-neighbors.spec.md`
 - Create: `tests/search_neighbors.rs`
 
-- [ ] **Step 1: Correct spec drift**
+- [x] **Step 1: Correct spec drift**
 
 Update the spec decisions:
 
@@ -59,7 +59,7 @@ Update the spec decisions:
 - Replace `src/cli.rs` with `src/main.rs`.
 - Replace migration acceptance scenario with a compatibility scenario that opens current schema and verifies `chunk_index` exists.
 
-- [ ] **Step 2: Add failing integration tests**
+- [x] **Step 2: Add failing integration tests**
 
 Create `tests/search_neighbors.rs` with a stub embedder and helpers to insert drawers/vectors.
 
@@ -93,7 +93,7 @@ async fn test_new_ingest_writes_chunk_index_sequentially() {}
 
 Use `search_with_vector_options` in library tests once it exists. First run can fail on unresolved import.
 
-- [ ] **Step 3: Run first failing test**
+- [x] **Step 3: Run first failing test**
 
 ```bash
 cargo test --test search_neighbors test_search_with_neighbors_includes_prev_next -- --exact
@@ -101,7 +101,7 @@ cargo test --test search_neighbors test_search_with_neighbors_includes_prev_next
 
 Expected: FAIL because neighbor search API does not exist.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add specs/p11-chunk-neighbors.spec.md tests/search_neighbors.rs
@@ -116,7 +116,7 @@ git commit -m "test: define chunk neighbor search contract"
 - Modify: `src/search/mod.rs`
 - Modify: `tests/search_neighbors.rs`
 
-- [ ] **Step 1: Add neighbor structs**
+- [x] **Step 1: Add neighbor structs**
 
 In `src/core/types.rs`:
 
@@ -142,7 +142,7 @@ pub chunk_index: Option<i64>,
 pub neighbors: Option<ChunkNeighbors>,
 ```
 
-- [ ] **Step 2: Add DB lookup**
+- [x] **Step 2: Add DB lookup**
 
 In `src/core/db.rs`, add:
 
@@ -158,7 +158,7 @@ pub fn neighbor_chunks(
 
 Query only `deleted_at IS NULL`, same `source_file`, same `wing`, and same room semantics (`room = ?` or `room IS NULL`).
 
-- [ ] **Step 3: Add search options wrappers**
+- [x] **Step 3: Add search options wrappers**
 
 In `src/search/mod.rs`:
 
@@ -178,11 +178,11 @@ pub fn search_with_vector_options(...)
 
 Hydrate neighbors after tunnel hints only when `with_neighbors && top_k <= 10`.
 
-- [ ] **Step 4: Include `chunk_index` in search row mapping**
+- [x] **Step 4: Include `chunk_index` in search row mapping**
 
 Add `d.chunk_index` to vector and FTS selects and set `SearchResult.chunk_index`.
 
-- [ ] **Step 5: Run core tests**
+- [x] **Step 5: Run core tests**
 
 ```bash
 cargo test --test search_neighbors test_search_with_neighbors_includes_prev_next -- --exact
@@ -194,7 +194,7 @@ cargo test --test search_neighbors test_neighbors_limited_to_same_wing -- --exac
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/core/types.rs src/core/db.rs src/search/mod.rs tests/search_neighbors.rs
@@ -209,7 +209,7 @@ git commit -m "feat: hydrate search chunk neighbors"
 - Modify: `src/main.rs`
 - Modify: `tests/search_neighbors.rs`
 
-- [ ] **Step 1: Add MCP request/response fields**
+- [x] **Step 1: Add MCP request/response fields**
 
 In `SearchRequest`, add:
 
@@ -224,7 +224,7 @@ In `SearchResultDto`, add:
 pub neighbors: Option<ChunkNeighborsDto>,
 ```
 
-- [ ] **Step 2: Pass MCP option into search**
+- [x] **Step 2: Pass MCP option into search**
 
 Use `SearchOptions` in `mempal_search`:
 
@@ -234,7 +234,7 @@ with_neighbors: request.with_neighbors.unwrap_or(false)
 
 Update existing `SearchRequest` literals in tests to include `with_neighbors: None`.
 
-- [ ] **Step 3: Add CLI flag**
+- [x] **Step 3: Add CLI flag**
 
 In `Commands::Search`, add:
 
@@ -245,7 +245,7 @@ with_neighbors: bool,
 
 Pass through `SearchCommandArgs` and search options.
 
-- [ ] **Step 4: Serialize/print neighbors**
+- [x] **Step 4: Serialize/print neighbors**
 
 Add `neighbors` to `CliSearchResult` with `skip_serializing_if`. For plain output, print compact labels:
 
@@ -254,7 +254,7 @@ prev[1]: ...
 next[3]: ...
 ```
 
-- [ ] **Step 5: Run MCP/CLI focused tests**
+- [x] **Step 5: Run MCP/CLI focused tests**
 
 ```bash
 cargo test --test search_neighbors test_with_neighbors_omit_backward_compat -- --exact
@@ -263,7 +263,7 @@ cargo test --test search_neighbors test_cli_search_with_neighbors_json -- --exac
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/mcp/tools.rs src/mcp/server.rs src/main.rs tests/search_neighbors.rs
@@ -278,7 +278,7 @@ git commit -m "feat: expose chunk neighbors in search clients"
 - Modify: `CLAUDE.md`
 - Modify: `docs/plans/2026-04-24-p11-chunk-neighbors-implementation.md`
 
-- [ ] **Step 1: Finish ingest/schema tests**
+- [x] **Step 1: Finish ingest/schema tests**
 
 Run:
 
@@ -289,7 +289,7 @@ cargo test --test search_neighbors test_new_ingest_writes_chunk_index_sequential
 
 Expected: PASS.
 
-- [ ] **Step 2: Update inventory docs**
+- [x] **Step 2: Update inventory docs**
 
 Move `specs/p11-chunk-neighbors.spec.md` from current specs to completed specs in `AGENTS.md` and `CLAUDE.md`.
 
@@ -299,7 +299,7 @@ Add:
 - `docs/plans/2026-04-24-p11-chunk-neighbors-implementation.md` — P11 chunk neighbors（已完成）
 ```
 
-- [ ] **Step 3: Contract checks**
+- [x] **Step 3: Contract checks**
 
 ```bash
 agent-spec parse specs/p11-chunk-neighbors.spec.md
@@ -308,7 +308,7 @@ agent-spec lint specs/p11-chunk-neighbors.spec.md --min-score 0.7
 
 Expected: PASS.
 
-- [ ] **Step 4: Focused tests**
+- [x] **Step 4: Focused tests**
 
 ```bash
 cargo test --test search_neighbors
@@ -318,7 +318,7 @@ cargo test --test mind_model_bootstrap
 
 Expected: PASS.
 
-- [ ] **Step 5: Full verification**
+- [x] **Step 5: Full verification**
 
 ```bash
 cargo fmt --check
@@ -329,7 +329,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Expected: PASS.
 
-- [ ] **Step 6: Mark plan complete and commit**
+- [x] **Step 6: Mark plan complete and commit**
 
 ```bash
 git add AGENTS.md CLAUDE.md docs/plans/2026-04-24-p11-chunk-neighbors-implementation.md
@@ -338,12 +338,12 @@ git commit -m "docs: close chunk neighbors plan"
 
 ## Final Checklist
 
-- [ ] `with_neighbors` defaults to false.
-- [ ] Default JSON omits `neighbors`.
-- [ ] `with_neighbors=true` returns prev/next chunks for top_k <= 10.
-- [ ] First/last chunk boundaries return one-sided neighbors.
-- [ ] `top_k > 10` suppresses neighbors.
-- [ ] Neighbor lookup stays in same source_file, wing, and room.
-- [ ] CLI and MCP both expose opt-in behavior.
-- [ ] New ingest still writes sequential chunk_index values.
-- [ ] No schema bump and no new dependencies.
+- [x] `with_neighbors` defaults to false.
+- [x] Default JSON omits `neighbors`.
+- [x] `with_neighbors=true` returns prev/next chunks for top_k <= 10.
+- [x] First/last chunk boundaries return one-sided neighbors.
+- [x] `top_k > 10` suppresses neighbors.
+- [x] Neighbor lookup stays in same source_file, wing, and room.
+- [x] CLI and MCP both expose opt-in behavior.
+- [x] New ingest still writes sequential chunk_index values.
+- [x] No schema bump and no new dependencies.
