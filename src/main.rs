@@ -656,6 +656,18 @@ fn anchor_kind_slug(value: &AnchorKind) -> &'static str {
     }
 }
 
+fn effective_wake_up_text(drawer: &mempal::core::types::Drawer) -> &str {
+    match drawer.memory_kind {
+        MemoryKind::Knowledge => drawer
+            .statement
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(drawer.content.as_str()),
+        MemoryKind::Evidence => drawer.content.as_str(),
+    }
+}
+
 fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
     if let Some("aaak") = format {
         return wake_up_aaak_command(db);
@@ -673,7 +685,7 @@ fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
     let top_drawers = db
         .top_drawers(5)
         .context("failed to load recent drawers for wake-up")?;
-    let token_estimate = estimate_tokens(&top_drawers);
+    let token_estimate = estimate_wake_up_tokens(&top_drawers);
 
     // L0: identity + global stats
     println!("## L0 — Identity");
@@ -705,7 +717,10 @@ fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
             if let Some(source_file) = drawer.source_file.as_deref() {
                 println!("  source: {source_file}");
             }
-            println!("  {}", truncate_for_summary(&drawer.content, 120));
+            println!(
+                "  {}",
+                truncate_for_summary(effective_wake_up_text(drawer), 120)
+            );
         }
     }
     println!();
@@ -738,7 +753,7 @@ fn wake_up_aaak_command(db: &Database) -> Result<()> {
     } else {
         top_drawers
             .iter()
-            .map(|drawer| drawer.content.as_str())
+            .map(effective_wake_up_text)
             .collect::<Vec<_>>()
             .join(" ")
     };
@@ -1676,10 +1691,10 @@ fn truncate_for_summary(content: &str, limit: usize) -> String {
     compact.chars().take(limit).collect::<String>() + "..."
 }
 
-fn estimate_tokens(drawers: &[mempal::core::types::Drawer]) -> usize {
+fn estimate_wake_up_tokens(drawers: &[mempal::core::types::Drawer]) -> usize {
     drawers
         .iter()
-        .map(|drawer| drawer.content.split_whitespace().count())
+        .map(|drawer| effective_wake_up_text(drawer).split_whitespace().count())
         .sum()
 }
 

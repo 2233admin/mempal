@@ -8,11 +8,12 @@ use std::thread;
 use std::{fs, path::Path};
 
 use async_trait::async_trait;
+use mempal::aaak::{AaakCodec, AaakDocument};
 use mempal::core::types::{
     AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
     SourceType, TriggerHints,
 };
-use mempal::core::{anchor, db::Database};
+use mempal::core::{anchor, db::Database, protocol::MEMORY_PROTOCOL};
 use mempal::embed::{Embedder, EmbedderFactory};
 use mempal::mcp::MempalMcpServer;
 use rusqlite::Connection;
@@ -281,6 +282,21 @@ fn run_cli_search_json(home: &Path, query: &str, extra_args: &[&str]) -> Vec<Val
     serde_json::from_slice(&output.stdout).expect("parse cli search json")
 }
 
+fn run_cli_wake_up(home: &Path, format: Option<&str>) -> String {
+    let mut command = Command::new(mempal_bin());
+    command.arg("wake-up").env("HOME", home);
+    if let Some(format) = format {
+        command.args(["--format", format]);
+    }
+    let output = command.output().expect("run mempal wake-up");
+    assert!(
+        output.status.success(),
+        "wake-up command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("wake-up stdout should be utf8")
+}
+
 fn assert_cli_filter_selects_only(
     query: &str,
     extra_args: &[&str],
@@ -347,6 +363,10 @@ fn insert_search_fixture(db: &Database, drawer: &Drawer, vector: &[f32]) {
     db.insert_drawer(drawer).expect("insert search drawer");
     db.insert_vector(&drawer.id, vector)
         .expect("insert search vector");
+}
+
+fn insert_cli_wake_up_drawer(db: &Database, drawer: &Drawer) {
+    db.insert_drawer(drawer).expect("insert wake-up drawer");
 }
 
 #[test]
@@ -1636,4 +1656,159 @@ fn test_cli_search_json_filters_are_wired_individually() {
         &anchor_target,
         &anchor_distractor,
     );
+}
+
+#[test]
+fn test_wake_up_prefers_knowledge_statement_in_plain_output() {
+    let (tmp, db) = setup_cli_home();
+    let drawer = bootstrap_drawer(
+        "drawer_kn_wake_statement",
+        "Start from a concrete reproduction, then isolate scope before patching.",
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Shu),
+        Some(KnowledgeStatus::Promoted),
+        Some("Debug by reproducing before patching."),
+    );
+    insert_cli_wake_up_drawer(&db, &drawer);
+
+    let output = run_cli_wake_up(tmp.path(), None);
+
+    assert!(output.contains("Debug by reproducing before patching."));
+    assert!(
+        !output.contains("Start from a concrete reproduction, then isolate scope before patching.")
+    );
+}
+
+#[test]
+fn test_wake_up_evidence_drawer_still_uses_content() {
+    let (tmp, db) = setup_cli_home();
+    let drawer = bootstrap_drawer(
+        "drawer_ev_wake_content",
+        "Observed that tests failed after the patch.",
+        MemoryKind::Evidence,
+        None,
+        None,
+        None,
+    );
+    insert_cli_wake_up_drawer(&db, &drawer);
+
+    let output = run_cli_wake_up(tmp.path(), None);
+
+    assert!(output.contains("Observed that tests failed after the patch."));
+}
+
+#[test]
+fn test_wake_up_knowledge_without_statement_falls_back_to_content() {
+    let (tmp, db) = setup_cli_home();
+    let drawer = bootstrap_drawer(
+        "drawer_kn_wake_fallback",
+        "Fallback to the rationale body when statement is missing.",
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Shu),
+        Some(KnowledgeStatus::Promoted),
+        Some("   "),
+    );
+    insert_cli_wake_up_drawer(&db, &drawer);
+
+    let output = run_cli_wake_up(tmp.path(), None);
+
+    assert!(output.contains("Fallback to the rationale body when statement is missing."));
+}
+
+#[test]
+fn test_wake_up_estimated_tokens_use_effective_text() {
+    let (tmp, db) = setup_cli_home();
+    let drawer = bootstrap_drawer(
+        "drawer_kn_wake_tokens",
+        "This longer rationale body should not drive the token estimate anymore.",
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Shu),
+        Some(KnowledgeStatus::Promoted),
+        Some("Short wake text"),
+    );
+    insert_cli_wake_up_drawer(&db, &drawer);
+
+    let output = run_cli_wake_up(tmp.path(), None);
+
+    assert!(output.contains("estimated_tokens: 3"));
+}
+
+#[test]
+fn test_wake_up_protocol_output_unchanged() {
+    let (tmp, db) = setup_cli_home();
+    let drawer = bootstrap_drawer(
+        "drawer_kn_protocol",
+        "Protocol mode should ignore drawer content.",
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Shu),
+        Some(KnowledgeStatus::Promoted),
+        Some("Protocol mode should ignore statements too."),
+    );
+    insert_cli_wake_up_drawer(&db, &drawer);
+
+    let output = run_cli_wake_up(tmp.path(), Some("protocol"));
+
+    assert_eq!(output.trim(), MEMORY_PROTOCOL);
+}
+
+#[test]
+fn test_wake_up_aaak_prefers_knowledge_statement() {
+    let (tmp, db) = setup_cli_home();
+    let drawer = bootstrap_drawer(
+        "drawer_kn_wake_aaak",
+        "Long rationale body should not be encoded for AAAK wake-up.",
+        MemoryKind::Knowledge,
+        Some(KnowledgeTier::Shu),
+        Some(KnowledgeStatus::Promoted),
+        Some("Use the short statement for AAAK wake-up."),
+    );
+    insert_cli_wake_up_drawer(&db, &drawer);
+
+    let output = run_cli_wake_up(tmp.path(), Some("aaak"));
+    let document = AaakDocument::parse(output.trim()).expect("parse aaak wake-up output");
+    let decoded = AaakCodec::default().decode(&document);
+
+    assert!(decoded.contains("Use the short statement for AAAK wake-up."));
+    assert!(!decoded.contains("Long rationale body should not be encoded for AAAK wake-up."));
+}
+
+#[test]
+fn test_wake_up_preserves_existing_top_drawer_order() {
+    let (tmp, db) = setup_cli_home();
+    let highest = Drawer {
+        importance: 5,
+        added_at: "1710010002".to_string(),
+        ..bootstrap_drawer(
+            "drawer_kn_order_high",
+            "High priority rationale body.",
+            MemoryKind::Knowledge,
+            Some(KnowledgeTier::Shu),
+            Some(KnowledgeStatus::Promoted),
+            Some("High priority statement."),
+        )
+    };
+    let lower = Drawer {
+        importance: 1,
+        added_at: "1710010001".to_string(),
+        ..bootstrap_drawer(
+            "drawer_kn_order_low",
+            "Low priority rationale body.",
+            MemoryKind::Knowledge,
+            Some(KnowledgeTier::Shu),
+            Some(KnowledgeStatus::Promoted),
+            Some("Low priority statement."),
+        )
+    };
+    insert_cli_wake_up_drawer(&db, &highest);
+    insert_cli_wake_up_drawer(&db, &lower);
+
+    let output = run_cli_wake_up(tmp.path(), None);
+    let highest_pos = output
+        .find("drawer_kn_order_high")
+        .expect("high drawer in output");
+    let lower_pos = output
+        .find("drawer_kn_order_low")
+        .expect("low drawer in output");
+
+    assert!(highest_pos < lower_pos);
 }

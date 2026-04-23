@@ -61,6 +61,7 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 | `specs/p11-chunk-neighbors.spec.md` | search 可选返回命中 chunk 前后邻居 |
 | `specs/p11-transcript-noise-strip.spec.md` | Claude JSONL / Codex rollout verbatim-safe 噪声剥离（依赖 P10 normalize-version） |
 | `specs/p12-mind-model-bootstrap.spec.md` | Stage-1 mind-model bootstrap：在现有 `drawers` 上引入 `evidence` / `knowledge` typed drawers、`dao/shu/qi` 最小治理字段和 `global/repo/worktree` anchor metadata |
+| `specs/p13-wake-up-statement.spec.md` | wake-up 最小闭环：knowledge drawer 优先按 `statement` 唤醒，evidence 继续按 `content` 唤醒 |
 
 ### 实现计划
 
@@ -71,6 +72,7 @@ mempal 借鉴 MemPalace 的设计理念（verbatim 存储、Wing/Room 结构、A
 - `docs/plans/2026-04-13-p7-implementation.md` — P7（已完成）
 - `docs/plans/2026-04-15-p8-implementation.md` — P8（已完成）
 - `docs/plans/2026-04-17-p9-implementation.md` — P9 fact-checker + ingest-lock（已完成）
+- `docs/plans/2026-04-23-p13a-implementation.md` — P13A wake-up statement（草稿）
 
 ### Spec 使用方式
 
