@@ -3,7 +3,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
-use super::types::{KnowledgeTier, MemoryDomain, TaxonomyEntry};
+use super::types::{
+    AnchorKind, BootstrapIdentityParts, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind,
+    Provenance, TaxonomyEntry,
+};
 
 pub const DEFAULT_ROOM: &str = "default";
 
@@ -42,6 +45,68 @@ pub fn build_bootstrap_drawer_id(
         sanitize_component(room),
         &digest[..8]
     )
+}
+
+pub fn bootstrap_identity_components(parts: BootstrapIdentityParts<'_>) -> Vec<String> {
+    let supporting_refs = normalized_sorted_strings(parts.supporting_refs);
+    let counterexample_refs = normalized_sorted_strings(parts.counterexample_refs);
+    let teaching_refs = normalized_sorted_strings(parts.teaching_refs);
+    let verification_refs = normalized_sorted_strings(parts.verification_refs);
+    let mut components = vec![
+        format!("memory_kind={}", memory_kind_as_str(parts.memory_kind)),
+        format!("domain={}", memory_domain_as_str(parts.domain)),
+        format!("field={}", parts.field),
+        format!("anchor_kind={}", anchor_kind_as_str(parts.anchor_kind)),
+        format!("anchor_id={}", parts.anchor_id),
+        format!("parent_anchor_id={}", parts.parent_anchor_id.unwrap_or("")),
+        format!(
+            "provenance={}",
+            parts.provenance.map(provenance_as_str).unwrap_or("")
+        ),
+        format!("statement={}", parts.statement.unwrap_or("")),
+        format!(
+            "tier={}",
+            parts.tier.map(knowledge_tier_as_str).unwrap_or("")
+        ),
+        format!(
+            "status={}",
+            parts.status.map(knowledge_status_as_str).unwrap_or("")
+        ),
+        format!(
+            "scope_constraints={}",
+            parts.scope_constraints.unwrap_or("")
+        ),
+        format!("supporting_refs={}", supporting_refs.join(",")),
+        format!("counterexample_refs={}", counterexample_refs.join(",")),
+        format!("teaching_refs={}", teaching_refs.join(",")),
+        format!("verification_refs={}", verification_refs.join(",")),
+    ];
+
+    if let Some(trigger_hints) = parts.trigger_hints {
+        components.push(format!(
+            "intent_tags={}",
+            normalized_sorted_strings(&trigger_hints.intent_tags).join(",")
+        ));
+        components.push(format!(
+            "workflow_bias={}",
+            normalized_sorted_strings(&trigger_hints.workflow_bias).join(",")
+        ));
+        components.push(format!(
+            "tool_needs={}",
+            normalized_sorted_strings(&trigger_hints.tool_needs).join(",")
+        ));
+    }
+
+    components
+}
+
+pub fn build_bootstrap_drawer_id_from_parts(
+    wing: &str,
+    room: Option<&str>,
+    content: &str,
+    parts: BootstrapIdentityParts<'_>,
+) -> String {
+    build_bootstrap_drawer_id(wing, room, content, &bootstrap_identity_components(parts))
 }
 
 pub fn build_triple_id(subject: &str, predicate: &str, object: &str) -> String {
@@ -178,12 +243,35 @@ fn enum_slug(value: &str) -> String {
     value.replace('_', "-")
 }
 
+fn memory_kind_as_str(kind: &MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Evidence => "evidence",
+        MemoryKind::Knowledge => "knowledge",
+    }
+}
+
 fn memory_domain_as_str(domain: &MemoryDomain) -> &'static str {
     match domain {
         MemoryDomain::Project => "project",
         MemoryDomain::Agent => "agent",
         MemoryDomain::Skill => "skill",
         MemoryDomain::Global => "global",
+    }
+}
+
+fn anchor_kind_as_str(kind: &AnchorKind) -> &'static str {
+    match kind {
+        AnchorKind::Global => "global",
+        AnchorKind::Repo => "repo",
+        AnchorKind::Worktree => "worktree",
+    }
+}
+
+fn provenance_as_str(provenance: &Provenance) -> &'static str {
+    match provenance {
+        Provenance::Runtime => "runtime",
+        Provenance::Research => "research",
+        Provenance::Human => "human",
     }
 }
 
@@ -194,6 +282,27 @@ fn knowledge_tier_as_str(tier: &KnowledgeTier) -> &'static str {
         KnowledgeTier::DaoRen => "dao_ren",
         KnowledgeTier::DaoTian => "dao_tian",
     }
+}
+
+fn knowledge_status_as_str(status: &KnowledgeStatus) -> &'static str {
+    match status {
+        KnowledgeStatus::Candidate => "candidate",
+        KnowledgeStatus::Promoted => "promoted",
+        KnowledgeStatus::Canonical => "canonical",
+        KnowledgeStatus::Demoted => "demoted",
+        KnowledgeStatus::Retired => "retired",
+    }
+}
+
+fn normalized_sorted_strings(values: &[String]) -> Vec<String> {
+    let mut normalized = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized
 }
 
 fn matched_keywords(

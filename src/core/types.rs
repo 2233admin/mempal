@@ -67,6 +67,26 @@ pub struct TriggerHints {
     pub tool_needs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct BootstrapIdentityParts<'a> {
+    pub memory_kind: &'a MemoryKind,
+    pub domain: &'a MemoryDomain,
+    pub field: &'a str,
+    pub anchor_kind: &'a AnchorKind,
+    pub anchor_id: &'a str,
+    pub parent_anchor_id: Option<&'a str>,
+    pub provenance: Option<&'a Provenance>,
+    pub statement: Option<&'a str>,
+    pub tier: Option<&'a KnowledgeTier>,
+    pub status: Option<&'a KnowledgeStatus>,
+    pub supporting_refs: &'a [String],
+    pub counterexample_refs: &'a [String],
+    pub teaching_refs: &'a [String],
+    pub verification_refs: &'a [String],
+    pub scope_constraints: Option<&'a str>,
+    pub trigger_hints: Option<&'a TriggerHints>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Drawer {
     pub id: String,

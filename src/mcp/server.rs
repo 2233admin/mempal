@@ -5,12 +5,12 @@ use crate::core::{
     anchor::{self, DerivedAnchor},
     db::Database,
     types::{
-        AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
-        SourceType, TriggerHints, Triple,
+        AnchorKind, BootstrapIdentityParts, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain,
+        MemoryKind, Provenance, SourceType, TriggerHints, Triple,
     },
     utils::{
-        build_bootstrap_drawer_id, build_triple_id, current_timestamp, knowledge_source_file,
-        source_file_or_synthetic,
+        build_bootstrap_drawer_id_from_parts, build_triple_id, current_timestamp,
+        knowledge_source_file, source_file_or_synthetic,
     },
 };
 use crate::cowork::{PeekError, PeekRequest as CoworkPeekRequest, Tool, peek_partner};
@@ -118,63 +118,25 @@ struct ValidatedIngestMetadata {
 }
 
 impl ValidatedIngestMetadata {
-    fn identity_components(&self) -> Vec<String> {
-        let supporting_refs = normalized_sorted_strings(&self.supporting_refs);
-        let counterexample_refs = normalized_sorted_strings(&self.counterexample_refs);
-        let teaching_refs = normalized_sorted_strings(&self.teaching_refs);
-        let verification_refs = normalized_sorted_strings(&self.verification_refs);
-        let mut components = vec![
-            format!("memory_kind={}", memory_kind_slug(&self.memory_kind)),
-            format!("domain={}", domain_slug(&self.domain)),
-            format!("field={}", self.field),
-            format!("anchor_kind={}", anchor_kind_slug(&self.anchor_kind)),
-            format!("anchor_id={}", self.anchor_id),
-            format!(
-                "parent_anchor_id={}",
-                self.parent_anchor_id.as_deref().unwrap_or("")
-            ),
-            format!(
-                "provenance={}",
-                self.provenance.as_ref().map(provenance_slug).unwrap_or("")
-            ),
-            format!("statement={}", self.statement.as_deref().unwrap_or("")),
-            format!(
-                "tier={}",
-                self.tier.as_ref().map(knowledge_tier_slug).unwrap_or("")
-            ),
-            format!(
-                "status={}",
-                self.status
-                    .as_ref()
-                    .map(knowledge_status_slug)
-                    .unwrap_or("")
-            ),
-            format!(
-                "scope_constraints={}",
-                self.scope_constraints.as_deref().unwrap_or("")
-            ),
-            format!("supporting_refs={}", supporting_refs.join(",")),
-            format!("counterexample_refs={}", counterexample_refs.join(",")),
-            format!("teaching_refs={}", teaching_refs.join(",")),
-            format!("verification_refs={}", verification_refs.join(",")),
-        ];
-
-        if let Some(trigger_hints) = &self.trigger_hints {
-            components.push(format!(
-                "intent_tags={}",
-                normalized_sorted_strings(&trigger_hints.intent_tags).join(",")
-            ));
-            components.push(format!(
-                "workflow_bias={}",
-                normalized_sorted_strings(&trigger_hints.workflow_bias).join(",")
-            ));
-            components.push(format!(
-                "tool_needs={}",
-                normalized_sorted_strings(&trigger_hints.tool_needs).join(",")
-            ));
+    fn identity_parts(&self) -> BootstrapIdentityParts<'_> {
+        BootstrapIdentityParts {
+            memory_kind: &self.memory_kind,
+            domain: &self.domain,
+            field: &self.field,
+            anchor_kind: &self.anchor_kind,
+            anchor_id: &self.anchor_id,
+            parent_anchor_id: self.parent_anchor_id.as_deref(),
+            provenance: self.provenance.as_ref(),
+            statement: self.statement.as_deref(),
+            tier: self.tier.as_ref(),
+            status: self.status.as_ref(),
+            supporting_refs: &self.supporting_refs,
+            counterexample_refs: &self.counterexample_refs,
+            teaching_refs: &self.teaching_refs,
+            verification_refs: &self.verification_refs,
+            scope_constraints: self.scope_constraints.as_deref(),
+            trigger_hints: self.trigger_hints.as_ref(),
         }
-
-        components
     }
 }
 
@@ -484,17 +446,6 @@ fn looks_like_drawer_id(value: &str) -> bool {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
 }
 
-fn normalized_sorted_strings(values: &[String]) -> Vec<String> {
-    let mut normalized = values
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    normalized.sort();
-    normalized
-}
-
 fn trigger_hints_from_dto(dto: &TriggerHintsDto) -> TriggerHints {
     TriggerHints {
         intent_tags: normalize_refs(Some(&dto.intent_tags)),
@@ -513,57 +464,6 @@ fn trim_to_owned(value: Option<&str>) -> Option<String> {
 
 fn anchor_error(error: anchor::AnchorError) -> ErrorData {
     ErrorData::invalid_params(error.to_string(), None)
-}
-
-fn memory_kind_slug(value: &MemoryKind) -> &'static str {
-    match value {
-        MemoryKind::Evidence => "evidence",
-        MemoryKind::Knowledge => "knowledge",
-    }
-}
-
-fn domain_slug(value: &MemoryDomain) -> &'static str {
-    match value {
-        MemoryDomain::Project => "project",
-        MemoryDomain::Agent => "agent",
-        MemoryDomain::Skill => "skill",
-        MemoryDomain::Global => "global",
-    }
-}
-
-fn anchor_kind_slug(value: &AnchorKind) -> &'static str {
-    match value {
-        AnchorKind::Global => "global",
-        AnchorKind::Repo => "repo",
-        AnchorKind::Worktree => "worktree",
-    }
-}
-
-fn provenance_slug(value: &Provenance) -> &'static str {
-    match value {
-        Provenance::Runtime => "runtime",
-        Provenance::Research => "research",
-        Provenance::Human => "human",
-    }
-}
-
-fn knowledge_tier_slug(value: &KnowledgeTier) -> &'static str {
-    match value {
-        KnowledgeTier::Qi => "qi",
-        KnowledgeTier::Shu => "shu",
-        KnowledgeTier::DaoRen => "dao_ren",
-        KnowledgeTier::DaoTian => "dao_tian",
-    }
-}
-
-fn knowledge_status_slug(value: &KnowledgeStatus) -> &'static str {
-    match value {
-        KnowledgeStatus::Candidate => "candidate",
-        KnowledgeStatus::Promoted => "promoted",
-        KnowledgeStatus::Canonical => "canonical",
-        KnowledgeStatus::Demoted => "demoted",
-        KnowledgeStatus::Retired => "retired",
-    }
 }
 
 #[tool_router(router = tool_router)]
@@ -662,11 +562,11 @@ impl MempalMcpServer {
     ) -> std::result::Result<Json<IngestResponse>, ErrorData> {
         let room = request.room.as_deref();
         let metadata = validate_ingest_request(&request, &SourceType::Manual)?;
-        let drawer_id = build_bootstrap_drawer_id(
+        let drawer_id = build_bootstrap_drawer_id_from_parts(
             &request.wing,
             room,
             &request.content,
-            &metadata.identity_components(),
+            metadata.identity_parts(),
         );
 
         if request.dry_run.unwrap_or(false) {

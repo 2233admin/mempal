@@ -10,9 +10,10 @@ use std::{fs, path::Path};
 use async_trait::async_trait;
 use mempal::aaak::{AaakCodec, AaakDocument};
 use mempal::core::types::{
-    AnchorKind, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, Provenance,
-    SourceType, TriggerHints,
+    AnchorKind, BootstrapIdentityParts, Drawer, KnowledgeStatus, KnowledgeTier, MemoryDomain,
+    MemoryKind, Provenance, SourceType, TriggerHints,
 };
+use mempal::core::utils::{build_bootstrap_drawer_id_from_parts, build_drawer_id};
 use mempal::core::{anchor, db::Database, protocol::MEMORY_PROTOCOL};
 use mempal::embed::{Embedder, EmbedderFactory};
 use mempal::mcp::MempalMcpServer;
@@ -647,6 +648,449 @@ async fn test_mcp_ingest_defaults_to_evidence_drawer_bootstrap_metadata() {
     assert_eq!(drawer.statement, None);
     assert_eq!(drawer.tier, None);
     assert_eq!(drawer.status, None);
+}
+
+#[tokio::test]
+async fn test_mcp_ingest_default_drawer_id_matches_bootstrap_identity() {
+    let (_tmp, _db, server) = setup_mcp_server();
+    let content = "Default MCP identity body";
+    let response = server
+        .ingest_json_for_test(json!({
+            "content": content,
+            "wing": "mempal",
+            "room": "identity"
+        }))
+        .await
+        .expect("default ingest should succeed");
+
+    let defaults = anchor::bootstrap_defaults(&SourceType::Manual);
+    let memory_kind = MemoryKind::Evidence;
+    let domain = MemoryDomain::Project;
+    let empty_refs: &[String] = &[];
+    let expected = build_bootstrap_drawer_id_from_parts(
+        "mempal",
+        Some("identity"),
+        content,
+        BootstrapIdentityParts {
+            memory_kind: &memory_kind,
+            domain: &domain,
+            field: &defaults.field,
+            anchor_kind: &defaults.anchor_kind,
+            anchor_id: &defaults.anchor_id,
+            parent_anchor_id: defaults.parent_anchor_id.as_deref(),
+            provenance: Some(&defaults.provenance),
+            statement: None,
+            tier: None,
+            status: None,
+            supporting_refs: empty_refs,
+            counterexample_refs: empty_refs,
+            teaching_refs: empty_refs,
+            verification_refs: empty_refs,
+            scope_constraints: None,
+            trigger_hints: None,
+        },
+    );
+
+    assert_eq!(response.drawer_id, expected);
+    assert_ne!(
+        response.drawer_id,
+        build_drawer_id("mempal", Some("identity"), content)
+    );
+}
+
+#[test]
+fn test_knowledge_bootstrap_identity_changes_when_governance_component_changes() {
+    let content = "Governed identity body";
+    let supporting_refs = vec!["drawer_ev_001".to_string(), "drawer_ev_002".to_string()];
+    let counterexample_refs = vec!["drawer_cex_001".to_string()];
+    let teaching_refs = vec!["drawer_teach_001".to_string()];
+    let verification_refs = vec!["drawer_verify_001".to_string()];
+    let trigger_hints = TriggerHints {
+        intent_tags: vec!["debug".to_string(), "identity".to_string()],
+        workflow_bias: vec!["tdd".to_string()],
+        tool_needs: vec!["cargo-test".to_string()],
+    };
+
+    let build = |memory_kind: &MemoryKind,
+                 domain: &MemoryDomain,
+                 field: &str,
+                 anchor_kind: &AnchorKind,
+                 anchor_id: &str,
+                 parent_anchor_id: Option<&str>,
+                 statement: Option<&str>,
+                 tier: Option<&KnowledgeTier>,
+                 status: Option<&KnowledgeStatus>,
+                 supporting_refs: &[String],
+                 counterexample_refs: &[String],
+                 teaching_refs: &[String],
+                 verification_refs: &[String],
+                 scope_constraints: Option<&str>,
+                 trigger_hints: Option<&TriggerHints>| {
+        build_bootstrap_drawer_id_from_parts(
+            "mempal",
+            Some("identity"),
+            content,
+            BootstrapIdentityParts {
+                memory_kind,
+                domain,
+                field,
+                anchor_kind,
+                anchor_id,
+                parent_anchor_id,
+                provenance: None,
+                statement,
+                tier,
+                status,
+                supporting_refs,
+                counterexample_refs,
+                teaching_refs,
+                verification_refs,
+                scope_constraints,
+                trigger_hints,
+            },
+        )
+    };
+
+    let base_kind = MemoryKind::Knowledge;
+    let evidence_kind = MemoryKind::Evidence;
+    let base_domain = MemoryDomain::Skill;
+    let global_domain = MemoryDomain::Global;
+    let base_anchor_kind = AnchorKind::Repo;
+    let worktree_anchor_kind = AnchorKind::Worktree;
+    let base_tier = KnowledgeTier::Shu;
+    let dao_tier = KnowledgeTier::DaoRen;
+    let base_status = KnowledgeStatus::Promoted;
+    let candidate_status = KnowledgeStatus::Candidate;
+    let base = build(
+        &base_kind,
+        &base_domain,
+        "debugging",
+        &base_anchor_kind,
+        "repo://identity",
+        Some("repo://parent"),
+        Some("Debug by reproducing before patching."),
+        Some(&base_tier),
+        Some(&base_status),
+        &supporting_refs,
+        &counterexample_refs,
+        &teaching_refs,
+        &verification_refs,
+        Some("Rust code only"),
+        Some(&trigger_hints),
+    );
+
+    let empty_refs: Vec<String> = Vec::new();
+    let changed_trigger_hints = TriggerHints {
+        intent_tags: vec!["debug".to_string(), "different".to_string()],
+        workflow_bias: vec!["tdd".to_string()],
+        tool_needs: vec!["cargo-test".to_string()],
+    };
+    let variants = [
+        (
+            "memory_kind",
+            build(
+                &evidence_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "domain",
+            build(
+                &base_kind,
+                &global_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "field",
+            build(
+                &base_kind,
+                &base_domain,
+                "testing",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "anchor_kind",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &worktree_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "anchor_id",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://other",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "parent_anchor_id",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://other-parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "statement",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Patch only after a concrete reproduction."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "tier",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&dao_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "status",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&candidate_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "supporting_refs",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &empty_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "counterexample_refs",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &empty_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "teaching_refs",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &empty_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "verification_refs",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &empty_refs,
+                Some("Rust code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "scope_constraints",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Python code only"),
+                Some(&trigger_hints),
+            ),
+        ),
+        (
+            "trigger_hints",
+            build(
+                &base_kind,
+                &base_domain,
+                "debugging",
+                &base_anchor_kind,
+                "repo://identity",
+                Some("repo://parent"),
+                Some("Debug by reproducing before patching."),
+                Some(&base_tier),
+                Some(&base_status),
+                &supporting_refs,
+                &counterexample_refs,
+                &teaching_refs,
+                &verification_refs,
+                Some("Rust code only"),
+                Some(&changed_trigger_hints),
+            ),
+        ),
+    ];
+
+    for (component, variant) in variants {
+        assert_ne!(base, variant, "{component} must participate in identity");
+    }
 }
 
 #[tokio::test]
