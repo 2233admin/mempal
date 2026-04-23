@@ -55,7 +55,7 @@
 - Modify: `src/ingest/mod.rs`
 - Create: `tests/noise_strip.rs`
 
-- [ ] **Step 1: Add failing unit tests for strip functions**
+- [x] **Step 1: Add failing unit tests for strip functions**
 
 Create `tests/noise_strip.rs` with tests:
 
@@ -93,7 +93,7 @@ cargo test --test noise_strip test_claude_jsonl_strips_system_reminder -- --exac
 
 FAIL because `ingest::noise` does not exist.
 
-- [ ] **Step 2: Correct spec drift**
+- [x] **Step 2: Correct spec drift**
 
 In `specs/p11-transcript-noise-strip.spec.md`:
 
@@ -104,7 +104,7 @@ In `specs/p11-transcript-noise-strip.spec.md`:
 
 Do not change acceptance intent.
 
-- [ ] **Step 3: Add `ingest::noise` module**
+- [x] **Step 3: Add `ingest::noise` module**
 
 In `src/ingest/mod.rs`:
 
@@ -131,7 +131,7 @@ Implementation rules:
 
 Do not add dependencies.
 
-- [ ] **Step 4: Run strip unit tests**
+- [x] **Step 4: Run strip unit tests**
 
 ```bash
 cargo test --test noise_strip test_claude_jsonl_strips_system_reminder -- --exact
@@ -144,7 +144,7 @@ cargo test --test noise_strip test_strip_preserves_unicode_bytes -- --exact
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add specs/p11-transcript-noise-strip.spec.md src/ingest/mod.rs src/ingest/noise.rs tests/noise_strip.rs
@@ -160,7 +160,7 @@ git commit -m "feat: add scoped transcript noise stripping"
 - Modify: `tests/noise_strip.rs`
 - Modify: `tests/normalize_version.rs`
 
-- [ ] **Step 1: Add failing normalize/ingest tests**
+- [x] **Step 1: Add failing normalize/ingest tests**
 
 In `tests/noise_strip.rs`, add:
 
@@ -182,7 +182,7 @@ Test shape:
 - `test_ingest_outcome_reports_stripped_bytes` ingests Claude JSONL whose message contains a known-size system reminder and asserts `stats.noise_bytes_stripped` is within the expected range.
 - `test_normalize_version_bump_triggers_reindex_opportunity` inserts a stale drawer at version 1 from a Claude JSONL source, runs library `reindex_sources`, and asserts active content has no reminder and version is `2`.
 
-- [ ] **Step 2: Add normalize output API**
+- [x] **Step 2: Add normalize output API**
 
 In `src/ingest/normalize.rs`, add:
 
@@ -217,7 +217,7 @@ pub fn normalize_content(content: &str, format: Format) -> Result<String>
 
 as a compatibility wrapper using `NormalizeOptions { strip_noise: true }`.
 
-- [ ] **Step 3: Apply noise strip only to transcript formats**
+- [x] **Step 3: Apply noise strip only to transcript formats**
 
 In `normalize_content_with_options`:
 
@@ -227,7 +227,7 @@ In `normalize_content_with_options`:
 
 Compute stripped bytes as `original_message.len() - stripped_message.len()` summed over messages. Return `Some(total)` only for Claude/Codex when strip is enabled.
 
-- [ ] **Step 4: Bump normalize version**
+- [x] **Step 4: Bump normalize version**
 
 In `src/ingest/normalize.rs`:
 
@@ -237,7 +237,7 @@ pub const CURRENT_NORMALIZE_VERSION: u32 = 2;
 
 Update `tests/normalize_version.rs` assertions that hard-code `1` for current-version behavior to use `CURRENT_NORMALIZE_VERSION`.
 
-- [ ] **Step 5: Extend ingest stats and options**
+- [x] **Step 5: Extend ingest stats and options**
 
 In `src/ingest/mod.rs`:
 
@@ -271,7 +271,7 @@ In `ingest_dir_with_options`, sum `noise_bytes_stripped` across files.
 
 Update all struct literals for `IngestOptions` to include `no_strip_noise: false`, except no-strip tests.
 
-- [ ] **Step 6: Run Task 2 tests**
+- [x] **Step 6: Run Task 2 tests**
 
 ```bash
 cargo test --test noise_strip test_plain_markdown_not_stripped -- --exact
@@ -282,7 +282,7 @@ cargo test --test normalize_version
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/ingest/normalize.rs src/ingest/mod.rs tests/noise_strip.rs tests/normalize_version.rs tests/ingest_lock.rs tests/mind_model_bootstrap.rs src/main.rs
@@ -295,7 +295,7 @@ git commit -m "feat: apply transcript noise strip during normalize"
 - Modify: `src/main.rs`
 - Modify: `tests/noise_strip.rs`
 
-- [ ] **Step 1: Add failing CLI flag test**
+- [x] **Step 1: Add failing CLI flag test**
 
 In `tests/noise_strip.rs`, add:
 
@@ -317,7 +317,7 @@ Assert:
 
 Because the CLI uses the real embedder for non-dry-run writes, do not make this test require actual embedding downloads. Library integration tests cover written drawer content.
 
-- [ ] **Step 2: Add CLI flag**
+- [x] **Step 2: Add CLI flag**
 
 In `Commands::Ingest` in `src/main.rs`, add:
 
@@ -328,7 +328,7 @@ no_strip_noise: bool,
 
 Pass it into `ingest_command`.
 
-- [ ] **Step 3: Wire `IngestOptions.no_strip_noise`**
+- [x] **Step 3: Wire `IngestOptions.no_strip_noise`**
 
 In `ingest_command`, use `ingest_dir_with_options` for both dry-run and normal paths:
 
@@ -345,7 +345,7 @@ IngestOptions {
 
 For file paths, either keep existing directory-only behavior or route file paths through `ingest_file_with_options`. Prefer file support if the change remains small.
 
-- [ ] **Step 4: Print strip metric**
+- [x] **Step 4: Print strip metric**
 
 Extend CLI output:
 
@@ -355,7 +355,7 @@ dry_run=false files=1 chunks=1 skipped=0 noise_bytes_stripped=2048
 
 If `None`, print `noise_bytes_stripped=0` to keep test output deterministic.
 
-- [ ] **Step 5: Run CLI test**
+- [x] **Step 5: Run CLI test**
 
 ```bash
 cargo test --test noise_strip test_cli_no_strip_noise_flag -- --exact
@@ -363,7 +363,7 @@ cargo test --test noise_strip test_cli_no_strip_noise_flag -- --exact
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/main.rs tests/noise_strip.rs
@@ -377,7 +377,7 @@ git commit -m "feat: add no-strip-noise ingest flag"
 - Modify: `CLAUDE.md`
 - Modify: `docs/plans/2026-04-23-p11-transcript-noise-strip-implementation.md`
 
-- [ ] **Step 1: Update inventory**
+- [x] **Step 1: Update inventory**
 
 In `AGENTS.md` and `CLAUDE.md`:
 
@@ -389,7 +389,7 @@ In `AGENTS.md` and `CLAUDE.md`:
 - `docs/plans/2026-04-23-p11-transcript-noise-strip-implementation.md` — P11 transcript noise strip（已完成）
 ```
 
-- [ ] **Step 2: Contract checks**
+- [x] **Step 2: Contract checks**
 
 ```bash
 agent-spec parse specs/p11-transcript-noise-strip.spec.md
@@ -398,7 +398,7 @@ agent-spec lint specs/p11-transcript-noise-strip.spec.md --min-score 0.7
 
 Expected: PASS.
 
-- [ ] **Step 3: Focused tests**
+- [x] **Step 3: Focused tests**
 
 ```bash
 cargo test --test noise_strip
@@ -408,7 +408,7 @@ cargo test --test ingest_lock
 
 Expected: PASS.
 
-- [ ] **Step 4: Full verification**
+- [x] **Step 4: Full verification**
 
 ```bash
 cargo fmt --check
@@ -419,11 +419,11 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Expected: PASS.
 
-- [ ] **Step 5: Mark plan complete**
+- [x] **Step 5: Mark plan complete**
 
 Mark all plan checkboxes and final checklist entries complete.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add AGENTS.md CLAUDE.md docs/plans/2026-04-23-p11-transcript-noise-strip-implementation.md
@@ -432,12 +432,12 @@ git commit -m "docs: close transcript noise strip plan"
 
 ## Final Checklist
 
-- [ ] Claude JSONL system-reminder blocks are stripped outside code blocks.
-- [ ] Code blocks, user angle brackets, Chinese, emoji, and quoted text are preserved.
-- [ ] Plain/Markdown content is not stripped.
-- [ ] Codex session marker lines are stripped.
-- [ ] `CURRENT_NORMALIZE_VERSION == 2`.
-- [ ] Ingest reports `noise_bytes_stripped`.
-- [ ] `--no-strip-noise` disables transcript stripping.
-- [ ] `reindex --stale` can refresh version-1 drawers to version 2.
-- [ ] No schema bump and no new dependencies.
+- [x] Claude JSONL system-reminder blocks are stripped outside code blocks.
+- [x] Code blocks, user angle brackets, Chinese, emoji, and quoted text are preserved.
+- [x] Plain/Markdown content is not stripped.
+- [x] Codex session marker lines are stripped.
+- [x] `CURRENT_NORMALIZE_VERSION == 2`.
+- [x] Ingest reports `noise_bytes_stripped`.
+- [x] `--no-strip-noise` disables transcript stripping.
+- [x] `reindex --stale` can refresh version-1 drawers to version 2.
+- [x] No schema bump and no new dependencies.
