@@ -59,7 +59,7 @@
 - Test: `tests/tunnels_explicit.rs`
 - Test: `tests/mind_model_bootstrap.rs`
 
-- [ ] **Step 1: Add failing core tests**
+- [x] **Step 1: Add failing core tests**
 
 Create `tests/tunnels_explicit.rs` with:
 
@@ -85,7 +85,7 @@ cargo test --test tunnels_explicit test_add_tunnel_dedup_unordered -- --exact
 
 FAIL because tunnel types and DB APIs do not exist.
 
-- [ ] **Step 2: Update specs for schema drift**
+- [x] **Step 2: Update specs for schema drift**
 
 In `specs/p10-explicit-tunnels.spec.md`:
 
@@ -100,7 +100,7 @@ In `specs/p10-normalize-version.spec.md`:
 - Change migration wording from `v5 → v6` to `v6 → v7`.
 - Preserve intent and out-of-scope.
 
-- [ ] **Step 3: Add tunnel domain types**
+- [x] **Step 3: Add tunnel domain types**
 
 In `src/core/types.rs`, add:
 
@@ -132,7 +132,7 @@ pub struct TunnelFollowResult {
 
 Use trimmed non-empty rooms as `Some`, empty rooms as `None`.
 
-- [ ] **Step 4: Add canonical id helper**
+- [x] **Step 4: Add canonical id helper**
 
 In `src/core/utils.rs`, add:
 
@@ -155,7 +155,7 @@ pub fn format_tunnel_endpoint(endpoint: &TunnelEndpoint) -> String
 
 Return `wing:room` when room exists, otherwise `wing`.
 
-- [ ] **Step 5: Add v6 migration and DB core APIs**
+- [x] **Step 5: Add v6 migration and DB core APIs**
 
 In `src/core/db.rs`:
 
@@ -201,7 +201,7 @@ Behavior:
 - `follow_explicit_tunnels` allows only hops 1 or 2; clamp/reject higher at MCP/CLI layer.
 - `explicit_tunnel_hints` returns formatted neighbor endpoints, deduped and sorted.
 
-- [ ] **Step 6: Update schema expectation tests**
+- [x] **Step 6: Update schema expectation tests**
 
 Update existing P12 migration tests that expect schema `5` to expect `6`.
 
@@ -217,7 +217,7 @@ cargo test --test mind_model_bootstrap test_migration_backfills_legacy_drawers_w
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add specs/p10-explicit-tunnels.spec.md specs/p10-normalize-version.spec.md src/core/types.rs src/core/utils.rs src/core/db.rs tests/tunnels_explicit.rs tests/mind_model_bootstrap.rs
@@ -233,7 +233,7 @@ git commit -m "feat: add explicit tunnel storage"
 - Modify: `src/mcp/server.rs`
 - Test: `tests/tunnels_explicit.rs`
 
-- [ ] **Step 1: Add failing MCP tests**
+- [x] **Step 1: Add failing MCP tests**
 
 Add:
 
@@ -253,7 +253,7 @@ async fn test_delete_passive_tunnel_rejected() {}
 
 Expected: FAIL because MCP request/response schema only supports passive discovery.
 
-- [ ] **Step 2: Extend MCP tool schemas**
+- [x] **Step 2: Extend MCP tool schemas**
 
 In `src/mcp/tools.rs`, add:
 
@@ -285,7 +285,7 @@ Expand `TunnelDto` to include:
 
 Keep passive rows populated with `kind="passive"`, `room=Some(room)`, and `wings`.
 
-- [ ] **Step 3: Add MCP test helper**
+- [x] **Step 3: Add MCP test helper**
 
 In `src/mcp/server.rs`, add test-only helper:
 
@@ -293,7 +293,7 @@ In `src/mcp/server.rs`, add test-only helper:
 pub async fn tunnels_json_for_test(&self, value: Value) -> Result<TunnelsResponse, ErrorData>
 ```
 
-- [ ] **Step 4: Implement `mempal_tunnels` action dispatch**
+- [x] **Step 4: Implement `mempal_tunnels` action dispatch**
 
 Change handler to:
 
@@ -314,7 +314,7 @@ Actions:
 
 Use `ErrorData::invalid_params(...)` for validation failures.
 
-- [ ] **Step 5: Run MCP tests**
+- [x] **Step 5: Run MCP tests**
 
 ```bash
 cargo test --test tunnels_explicit test_add_and_list_explicit_tunnel -- --exact
@@ -325,7 +325,7 @@ cargo test --test tunnels_explicit test_delete_passive_tunnel_rejected -- --exac
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/mcp/tools.rs src/mcp/server.rs tests/tunnels_explicit.rs
@@ -342,7 +342,7 @@ git commit -m "feat: extend mempal tunnels actions"
 - Modify: `src/core/protocol.rs`
 - Test: `tests/tunnels_explicit.rs`
 
-- [ ] **Step 1: Add failing search and CLI tests**
+- [x] **Step 1: Add failing search and CLI tests**
 
 Add:
 
@@ -356,7 +356,7 @@ fn test_cli_tunnels_add_list_follow_delete() {}
 
 Expected: FAIL because search only injects passive hints and CLI has no subcommands.
 
-- [ ] **Step 2: Merge explicit hints into search**
+- [x] **Step 2: Merge explicit hints into search**
 
 In `src/search/mod.rs::inject_tunnel_hints`:
 
@@ -367,7 +367,7 @@ In `src/search/mod.rs::inject_tunnel_hints`:
 
 Do not change ranking or search result fields.
 
-- [ ] **Step 3: Extend CLI tunnels command**
+- [x] **Step 3: Extend CLI tunnels command**
 
 In `src/main.rs`:
 
@@ -393,11 +393,11 @@ Endpoint parser:
 - `wing` -> room `None`
 - empty wing rejected
 
-- [ ] **Step 4: Update protocol Rule 3**
+- [x] **Step 4: Update protocol Rule 3**
 
 In `src/core/protocol.rs`, append tunnel discovery guidance to Rule 3.
 
-- [ ] **Step 5: Run integration tests**
+- [x] **Step 5: Run integration tests**
 
 ```bash
 cargo test --test tunnels_explicit test_search_tunnel_hints_merges_passive_and_explicit -- --exact
@@ -406,7 +406,7 @@ cargo test --test tunnels_explicit test_cli_tunnels_add_list_follow_delete -- --
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/search/mod.rs src/main.rs src/core/protocol.rs tests/tunnels_explicit.rs
@@ -422,7 +422,7 @@ git commit -m "feat: merge explicit tunnels into search and cli"
 - Modify: `CLAUDE.md`
 - Modify: `docs/plans/2026-04-23-p10-explicit-tunnels-implementation.md`
 
-- [ ] **Step 1: Update inventory**
+- [x] **Step 1: Update inventory**
 
 Move `specs/p10-explicit-tunnels.spec.md` from current draft to completed specs in both `AGENTS.md` and `CLAUDE.md`.
 
@@ -432,7 +432,7 @@ Add this plan as completed:
 - `docs/plans/2026-04-23-p10-explicit-tunnels-implementation.md` — P10 explicit tunnels（已完成）
 ```
 
-- [ ] **Step 2: Run contract and project verification**
+- [x] **Step 2: Run contract and project verification**
 
 ```bash
 agent-spec parse specs/p10-explicit-tunnels.spec.md
@@ -447,11 +447,11 @@ cargo fmt --check
 
 Expected: PASS.
 
-- [ ] **Step 3: Mark plan checkboxes complete**
+- [x] **Step 3: Mark plan checkboxes complete**
 
 Mark completed steps and checklist entries in this plan.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add AGENTS.md CLAUDE.md docs/plans/2026-04-23-p10-explicit-tunnels-implementation.md
@@ -460,14 +460,14 @@ git commit -m "docs: close explicit tunnels plan"
 
 ## Final Checklist
 
-- [ ] Existing passive `find_tunnels()` behavior remains intact
-- [ ] Explicit tunnels are stored in a separate soft-deleted table
-- [ ] Unordered duplicate endpoint pairs produce one id
-- [ ] Self-link add is rejected before write
-- [ ] MCP add/list/delete/follow actions work through `mempal_tunnels`
-- [ ] Passive tunnel delete is rejected
-- [ ] Search tunnel hints merge passive and explicit hints
-- [ ] CLI supports add/list/delete/follow and preserves old default discover
-- [ ] Schema migrates from current v5 to v6 without data loss
-- [ ] P10 normalize-version spec is shifted to v7 follow-up
-- [ ] No new runtime dependency is introduced
+- [x] Existing passive `find_tunnels()` behavior remains intact
+- [x] Explicit tunnels are stored in a separate soft-deleted table
+- [x] Unordered duplicate endpoint pairs produce one id
+- [x] Self-link add is rejected before write
+- [x] MCP add/list/delete/follow actions work through `mempal_tunnels`
+- [x] Passive tunnel delete is rejected
+- [x] Search tunnel hints merge passive and explicit hints
+- [x] CLI supports add/list/delete/follow and preserves old default discover
+- [x] Schema migrates from current v5 to v6 without data loss
+- [x] P10 normalize-version spec is shifted to v7 follow-up
+- [x] No new runtime dependency is introduced
