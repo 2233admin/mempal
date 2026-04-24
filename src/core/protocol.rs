@@ -36,7 +36,9 @@ You have persistent project memory via mempal. Follow these rules in every sessi
 3. QUERY WHEN UNCERTAIN
    When the user asks about past decisions, historical context, "why did we...",
    "last time we...", or "what was the decision about...", call mempal_search
-   with their question. Do not rely on conversation memory alone.
+   with their question. Do not rely on conversation memory alone. You can also
+   call mempal_tunnels with action="list" to discover related rooms across
+   wings when context may live in another project.
 
 3a. TRANSLATE QUERIES TO ENGLISH
    The default embedding model is a multilingual distillation (model2vec) but
@@ -62,8 +64,10 @@ You have persistent project memory via mempal. Follow these rules in every sessi
    using mempal_ingest with wing="agent-diary" and room=your-agent-name (e.g.
    "claude", "codex"). Prefix entries with OBSERVATION:, LESSON:, or PATTERN:
    to categorize. Diary entries help future sessions of any agent learn from
-   past behavioral patterns. Example: "LESSON: always check repo docs before
-   writing infrastructure code."
+   past behavioral patterns. If recording multiple entries in one day, set
+   diary_rollup=true to merge them into the current UTC day's single drawer and
+   reduce search noise. Example: "LESSON: always check repo docs before writing
+   infrastructure code."
 
 8. PARTNER AWARENESS (cross-agent cowork)
    When the user references the partner coding agent ("Codex 那边...",

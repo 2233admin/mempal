@@ -1,4 +1,7 @@
-use crate::core::types::{RouteDecision, SearchResult, TaxonomyEntry};
+use crate::core::types::{
+    AnchorKind, ChunkNeighbors, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind,
+    NeighborChunk, RouteDecision, SearchResult, TaxonomyEntry, TunnelEndpoint,
+};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +26,27 @@ pub struct SearchRequest {
 
     /// Maximum number of results to return. Defaults to 10 when omitted.
     pub top_k: Option<usize>,
+
+    /// Optional memory kind filter (`evidence` or `knowledge`).
+    pub memory_kind: Option<String>,
+
+    /// Optional domain filter (`project`, `agent`, `skill`, `global`).
+    pub domain: Option<String>,
+
+    /// Optional bootstrap field filter.
+    pub field: Option<String>,
+
+    /// Optional knowledge tier filter.
+    pub tier: Option<String>,
+
+    /// Optional knowledge status filter.
+    pub status: Option<String>,
+
+    /// Optional anchor kind filter (`global`, `repo`, `worktree`).
+    pub anchor_kind: Option<String>,
+
+    /// If true and top_k <= 10, include previous/next chunks from the same source.
+    pub with_neighbors: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -42,6 +66,8 @@ pub struct SearchResultDto {
     /// Other wings sharing this room (tunnel cross-references).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tunnel_hints: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neighbors: Option<ChunkNeighborsDto>,
     /// 3-4 letter entity codes derived from AAAK analysis.
     pub entities: Vec<String>,
     /// Topic keywords derived from AAAK analysis. May be empty.
@@ -52,6 +78,34 @@ pub struct SearchResultDto {
     pub emotions: Vec<String>,
     /// Importance derived from AAAK flags, normalized to the existing 2-4 scale.
     pub importance_stars: u8,
+    pub memory_kind: String,
+    pub domain: String,
+    pub field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub anchor_kind: String,
+    pub anchor_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_anchor_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ChunkNeighborsDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev: Option<NeighborChunkDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<NeighborChunkDto>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct NeighborChunkDto {
+    pub drawer_id: String,
+    pub content: String,
+    pub chunk_index: u32,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -73,9 +127,38 @@ pub struct IngestRequest {
     /// writing to the database. Use this to preview before committing.
     pub dry_run: Option<bool>,
 
+    /// If true, append this entry to one agent-diary drawer for the current
+    /// UTC day. Requires wing="agent-diary" and an explicit room.
+    pub diary_rollup: Option<bool>,
+
     /// Importance ranking (0-5). Higher values appear first in wake-up context.
     /// Default 0. Use 3-5 for key decisions, architecture choices, and lessons learned.
     pub importance: Option<i32>,
+
+    pub memory_kind: Option<String>,
+    pub domain: Option<String>,
+    pub field: Option<String>,
+    pub provenance: Option<String>,
+    pub statement: Option<String>,
+    pub tier: Option<String>,
+    pub status: Option<String>,
+    pub supporting_refs: Option<Vec<String>>,
+    pub counterexample_refs: Option<Vec<String>>,
+    pub teaching_refs: Option<Vec<String>>,
+    pub verification_refs: Option<Vec<String>>,
+    pub scope_constraints: Option<String>,
+    pub trigger_hints: Option<TriggerHintsDto>,
+    pub anchor_kind: Option<String>,
+    pub anchor_id: Option<String>,
+    pub parent_anchor_id: Option<String>,
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct TriggerHintsDto {
+    pub intent_tags: Vec<String>,
+    pub workflow_bias: Vec<String>,
+    pub tool_needs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -115,9 +198,12 @@ pub struct DuplicateWarning {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct StatusResponse {
     pub schema_version: u32,
+    pub normalize_version_current: u32,
+    pub stale_drawer_count: u64,
     pub drawer_count: i64,
     pub taxonomy_count: i64,
     pub db_size_bytes: u64,
+    pub diary_rollup_days: u32,
     pub scopes: Vec<ScopeCount>,
     pub aaak_spec: String,
     pub memory_protocol: String,
@@ -200,6 +286,29 @@ pub struct TripleDto {
 
 // --- Tunnels ---
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct TunnelsRequest {
+    /// Action: "discover" (default), "list", "add", "delete", or "follow".
+    pub action: Option<String>,
+    pub left: Option<TunnelEndpointDto>,
+    pub right: Option<TunnelEndpointDto>,
+    pub from: Option<TunnelEndpointDto>,
+    pub label: Option<String>,
+    pub tunnel_id: Option<String>,
+    pub wing: Option<String>,
+    /// Filter for list: "passive", "explicit", or "all" (default).
+    pub kind: Option<String>,
+    /// Follow depth. Must be 1 or 2. Defaults to 1.
+    pub max_hops: Option<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TunnelEndpointDto {
+    pub wing: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct TunnelsResponse {
     pub tunnels: Vec<TunnelDto>,
@@ -207,8 +316,44 @@ pub struct TunnelsResponse {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct TunnelDto {
-    pub room: String,
+    pub tunnel_id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left: Option<TunnelEndpointDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right: Option<TunnelEndpointDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via_tunnel_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hop: Option<u8>,
+}
+
+impl From<TunnelEndpointDto> for TunnelEndpoint {
+    fn from(value: TunnelEndpointDto) -> Self {
+        Self {
+            wing: value.wing,
+            room: value.room,
+        }
+    }
+}
+
+impl From<&TunnelEndpoint> for TunnelEndpointDto {
+    fn from(value: &TunnelEndpoint) -> Self {
+        Self {
+            wing: value.wing.clone(),
+            room: value.room.clone(),
+        }
+    }
 }
 
 // --- Cowork peek ---
@@ -316,12 +461,92 @@ impl SearchResultDto {
             similarity: value.similarity,
             route: value.route.into(),
             tunnel_hints: value.tunnel_hints,
+            neighbors: value.neighbors.map(ChunkNeighborsDto::from),
             entities: signals.entities,
             topics: signals.topics,
             flags: signals.flags,
             emotions: signals.emotions,
             importance_stars: signals.importance_stars,
+            memory_kind: memory_kind_slug(&value.memory_kind).to_string(),
+            domain: domain_slug(&value.domain).to_string(),
+            field: value.field,
+            statement: value.statement,
+            tier: value
+                .tier
+                .as_ref()
+                .map(knowledge_tier_slug)
+                .map(str::to_string),
+            status: value
+                .status
+                .as_ref()
+                .map(knowledge_status_slug)
+                .map(str::to_string),
+            anchor_kind: anchor_kind_slug(&value.anchor_kind).to_string(),
+            anchor_id: value.anchor_id,
+            parent_anchor_id: value.parent_anchor_id,
         }
+    }
+}
+
+impl From<ChunkNeighbors> for ChunkNeighborsDto {
+    fn from(value: ChunkNeighbors) -> Self {
+        Self {
+            prev: value.prev.map(NeighborChunkDto::from),
+            next: value.next.map(NeighborChunkDto::from),
+        }
+    }
+}
+
+impl From<NeighborChunk> for NeighborChunkDto {
+    fn from(value: NeighborChunk) -> Self {
+        Self {
+            drawer_id: value.drawer_id,
+            content: value.content,
+            chunk_index: value.chunk_index,
+        }
+    }
+}
+
+fn memory_kind_slug(value: &MemoryKind) -> &'static str {
+    match value {
+        MemoryKind::Evidence => "evidence",
+        MemoryKind::Knowledge => "knowledge",
+    }
+}
+
+fn domain_slug(value: &MemoryDomain) -> &'static str {
+    match value {
+        MemoryDomain::Project => "project",
+        MemoryDomain::Agent => "agent",
+        MemoryDomain::Skill => "skill",
+        MemoryDomain::Global => "global",
+    }
+}
+
+fn knowledge_tier_slug(value: &KnowledgeTier) -> &'static str {
+    match value {
+        KnowledgeTier::Qi => "qi",
+        KnowledgeTier::Shu => "shu",
+        KnowledgeTier::DaoRen => "dao_ren",
+        KnowledgeTier::DaoTian => "dao_tian",
+    }
+}
+
+fn knowledge_status_slug(value: &KnowledgeStatus) -> &'static str {
+    match value {
+        KnowledgeStatus::Candidate => "candidate",
+        KnowledgeStatus::Promoted => "promoted",
+        KnowledgeStatus::Canonical => "canonical",
+        KnowledgeStatus::Demoted => "demoted",
+        KnowledgeStatus::Retired => "retired",
+    }
+}
+
+fn anchor_kind_slug(value: &AnchorKind) -> &'static str {
+    match value {
+        AnchorKind::Global => "global",
+        AnchorKind::Repo => "repo",
+        AnchorKind::Worktree => "worktree",
     }
 }
 
@@ -349,7 +574,10 @@ impl From<TaxonomyEntry> for TaxonomyEntryDto {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::{RouteDecision, SearchResult};
+    use crate::core::types::{
+        AnchorKind, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, RouteDecision,
+        SearchResult,
+    };
 
     use super::SearchResultDto;
 
@@ -360,6 +588,15 @@ mod tests {
             wing: "mempal".to_string(),
             room: Some("signals".to_string()),
             source_file: "/tmp/signals.md".to_string(),
+            memory_kind: MemoryKind::Knowledge,
+            domain: MemoryDomain::Project,
+            field: "bootstrap".to_string(),
+            statement: Some("normalized statement".to_string()),
+            tier: Some(KnowledgeTier::Shu),
+            status: Some(KnowledgeStatus::Promoted),
+            anchor_kind: AnchorKind::Repo,
+            anchor_id: "repo://signals".to_string(),
+            parent_anchor_id: None,
             similarity: 0.91,
             route: RouteDecision {
                 wing: Some("mempal".to_string()),
@@ -367,6 +604,8 @@ mod tests {
                 confidence: 0.88,
                 reason: "unit test".to_string(),
             },
+            chunk_index: Some(0),
+            neighbors: None,
             tunnel_hints: vec!["docs".to_string()],
         }
     }
@@ -382,6 +621,8 @@ mod tests {
         assert_eq!(dto.drawer_id, "drawer-1");
         assert_eq!(dto.source_file, "/tmp/signals.md");
         assert_eq!(dto.tunnel_hints, vec!["docs".to_string()]);
+        assert_eq!(dto.memory_kind, "knowledge");
+        assert_eq!(dto.tier.as_deref(), Some("shu"));
         assert!(dto.flags.contains(&"DECISION".to_string()));
         assert!(dto.importance_stars >= 2);
         assert!(!dto.entities.is_empty());

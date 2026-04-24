@@ -1,8 +1,11 @@
 use crate::core::{
     db::Database,
-    types::{Drawer, RouteDecision, SearchResult, SourceType, TaxonomyEntry},
-    utils::{build_drawer_id, current_timestamp, source_file_or_synthetic},
+    types::{
+        BootstrapEvidenceArgs, Drawer, RouteDecision, SearchResult, SourceType, TaxonomyEntry,
+    },
+    utils::{build_bootstrap_evidence_drawer_id, current_timestamp, source_file_or_synthetic},
 };
+use crate::ingest::normalize::CURRENT_NORMALIZE_VERSION;
 use crate::search::{resolve_route, search_with_vector};
 use axum::{
     Json, Router,
@@ -177,11 +180,16 @@ async fn ingest_handler(
             )
         })?;
     let db = Database::open(&state.db_path).map_err(internal_error)?;
-    let drawer_id = build_drawer_id(&request.wing, request.room.as_deref(), &request.content);
+    let drawer_id = build_bootstrap_evidence_drawer_id(
+        &request.wing,
+        request.room.as_deref(),
+        &request.content,
+        &SourceType::Manual,
+    );
 
     if !db.drawer_exists(&drawer_id).map_err(internal_error)? {
         let source_file = source_file_or_synthetic(&drawer_id, request.source.as_deref());
-        db.insert_drawer(&Drawer {
+        let drawer = Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
             id: drawer_id.clone(),
             content: request.content,
             wing: request.wing,
@@ -191,8 +199,12 @@ async fn ingest_handler(
             added_at: current_timestamp(),
             chunk_index: Some(0),
             importance: 0,
-        })
-        .map_err(internal_error)?;
+        });
+        let drawer = Drawer {
+            normalize_version: CURRENT_NORMALIZE_VERSION,
+            ..drawer
+        };
+        db.insert_drawer(&drawer).map_err(internal_error)?;
         db.insert_vector(&drawer_id, &vector)
             .map_err(internal_error)?;
     }

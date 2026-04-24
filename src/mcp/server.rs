@@ -1,14 +1,29 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::core::{
+    anchor::{self, DerivedAnchor},
     db::Database,
-    types::{Drawer, SourceType, Triple},
-    utils::{build_drawer_id, build_triple_id, current_timestamp, source_file_or_synthetic},
+    types::{
+        AnchorKind, BootstrapIdentityParts, Drawer, ExplicitTunnel, KnowledgeStatus, KnowledgeTier,
+        MemoryDomain, MemoryKind, Provenance, SourceType, TriggerHints, Triple,
+    },
+    utils::{
+        build_bootstrap_drawer_id_from_parts, build_triple_id, current_timestamp,
+        knowledge_source_file, source_file_or_synthetic,
+    },
 };
 use crate::cowork::{PeekError, PeekRequest as CoworkPeekRequest, Tool, peek_partner};
 use crate::embed::EmbedderFactory;
-use crate::search::{resolve_route, search_with_vector};
+use crate::ingest::{
+    IngestError,
+    diary::{
+        DIARY_ROLLUP_WING, DiaryRollupOptions, commit_prepared_diary_rollup,
+        diary_rollup_drawer_id, prepare_diary_rollup,
+    },
+    normalize::CURRENT_NORMALIZE_VERSION,
+};
+use crate::search::{SearchFilters, SearchOptions, resolve_route, search_with_vector_options};
 use anyhow::Context;
 use rmcp::{
     ErrorData, Json, ServerHandler, ServiceExt,
@@ -16,13 +31,15 @@ use rmcp::{
     model::{ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
+use serde_json::Value;
 
 use super::tools::{
     CoworkPushRequest, CoworkPushResponse, DeleteRequest, DeleteResponse, DuplicateWarning,
     FactCheckRequest, FactCheckResponse, IngestRequest, IngestResponse, KgRequest, KgResponse,
     KgStatsDto, PeekMessageDto, PeekPartnerRequest, PeekPartnerResponse, ScopeCount, SearchRequest,
     SearchResponse, SearchResultDto, StatusResponse, TaxonomyEntryDto, TaxonomyRequest,
-    TaxonomyResponse, TripleDto, TunnelDto, TunnelsResponse,
+    TaxonomyResponse, TriggerHintsDto, TripleDto, TunnelDto, TunnelEndpointDto, TunnelsRequest,
+    TunnelsResponse,
 };
 
 #[derive(Clone)]
@@ -65,6 +82,412 @@ impl MempalMcpServer {
             ErrorData::internal_error(format!("failed to open database: {error}"), None)
         })
     }
+
+    pub async fn ingest_json_for_test(
+        &self,
+        value: Value,
+    ) -> std::result::Result<IngestResponse, ErrorData> {
+        let request = serde_json::from_value(value)
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+        self.mempal_ingest(Parameters(request))
+            .await
+            .map(|response| response.0)
+    }
+
+    pub async fn search_json_for_test(
+        &self,
+        value: Value,
+    ) -> std::result::Result<SearchResponse, ErrorData> {
+        let request = serde_json::from_value(value)
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+        self.mempal_search(Parameters(request))
+            .await
+            .map(|response| response.0)
+    }
+
+    pub async fn tunnels_json_for_test(
+        &self,
+        value: Value,
+    ) -> std::result::Result<TunnelsResponse, ErrorData> {
+        let request = serde_json::from_value(value)
+            .map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+        self.mempal_tunnels(Parameters(request))
+            .await
+            .map(|response| response.0)
+    }
+
+    pub async fn status_json_for_test(&self) -> std::result::Result<StatusResponse, ErrorData> {
+        self.mempal_status().await.map(|response| response.0)
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedIngestMetadata {
+    memory_kind: MemoryKind,
+    domain: MemoryDomain,
+    field: String,
+    anchor_kind: AnchorKind,
+    anchor_id: String,
+    parent_anchor_id: Option<String>,
+    provenance: Option<Provenance>,
+    statement: Option<String>,
+    tier: Option<KnowledgeTier>,
+    status: Option<KnowledgeStatus>,
+    supporting_refs: Vec<String>,
+    counterexample_refs: Vec<String>,
+    teaching_refs: Vec<String>,
+    verification_refs: Vec<String>,
+    scope_constraints: Option<String>,
+    trigger_hints: Option<TriggerHints>,
+}
+
+impl ValidatedIngestMetadata {
+    fn identity_parts(&self) -> BootstrapIdentityParts<'_> {
+        BootstrapIdentityParts {
+            memory_kind: &self.memory_kind,
+            domain: &self.domain,
+            field: &self.field,
+            anchor_kind: &self.anchor_kind,
+            anchor_id: &self.anchor_id,
+            parent_anchor_id: self.parent_anchor_id.as_deref(),
+            provenance: self.provenance.as_ref(),
+            statement: self.statement.as_deref(),
+            tier: self.tier.as_ref(),
+            status: self.status.as_ref(),
+            supporting_refs: &self.supporting_refs,
+            counterexample_refs: &self.counterexample_refs,
+            teaching_refs: &self.teaching_refs,
+            verification_refs: &self.verification_refs,
+            scope_constraints: self.scope_constraints.as_deref(),
+            trigger_hints: self.trigger_hints.as_ref(),
+        }
+    }
+}
+
+fn validate_ingest_request(
+    request: &IngestRequest,
+    source_type: &SourceType,
+) -> std::result::Result<ValidatedIngestMetadata, ErrorData> {
+    let memory_kind =
+        parse_memory_kind(request.memory_kind.as_deref())?.unwrap_or(MemoryKind::Evidence);
+    let domain = parse_domain(request.domain.as_deref())?.unwrap_or(MemoryDomain::Project);
+    let field = trim_to_option(request.field.as_deref())
+        .unwrap_or(anchor::DEFAULT_FIELD)
+        .to_string();
+    let statement = trim_to_owned(request.statement.as_deref());
+    let tier = parse_tier(request.tier.as_deref())?;
+    let status = parse_status(request.status.as_deref())?;
+    let provenance = parse_provenance(request.provenance.as_deref())?;
+    let supporting_refs = normalize_refs(request.supporting_refs.as_deref());
+    let counterexample_refs = normalize_refs(request.counterexample_refs.as_deref());
+    let teaching_refs = normalize_refs(request.teaching_refs.as_deref());
+    let verification_refs = normalize_refs(request.verification_refs.as_deref());
+    let scope_constraints = trim_to_owned(request.scope_constraints.as_deref());
+    let trigger_hints = request.trigger_hints.as_ref().map(trigger_hints_from_dto);
+
+    let derived_anchor = validate_anchor_metadata(request, &domain, source_type)?;
+
+    match memory_kind {
+        MemoryKind::Evidence => {
+            if statement.is_some()
+                || tier.is_some()
+                || status.is_some()
+                || !supporting_refs.is_empty()
+                || !counterexample_refs.is_empty()
+                || !teaching_refs.is_empty()
+                || !verification_refs.is_empty()
+                || scope_constraints.is_some()
+                || trigger_hints.is_some()
+            {
+                return Err(ErrorData::invalid_params(
+                    "evidence drawer does not allow knowledge-only fields",
+                    None,
+                ));
+            }
+
+            Ok(ValidatedIngestMetadata {
+                memory_kind,
+                domain,
+                field,
+                anchor_kind: derived_anchor.anchor_kind,
+                anchor_id: derived_anchor.anchor_id,
+                parent_anchor_id: derived_anchor.parent_anchor_id,
+                provenance: Some(
+                    provenance.unwrap_or_else(|| anchor::bootstrap_provenance(source_type)),
+                ),
+                statement: None,
+                tier: None,
+                status: None,
+                supporting_refs: Vec::new(),
+                counterexample_refs: Vec::new(),
+                teaching_refs: Vec::new(),
+                verification_refs: Vec::new(),
+                scope_constraints: None,
+                trigger_hints: None,
+            })
+        }
+        MemoryKind::Knowledge => {
+            if provenance.is_some() {
+                return Err(ErrorData::invalid_params(
+                    "knowledge drawer does not allow provenance",
+                    None,
+                ));
+            }
+
+            let statement = statement.ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "knowledge drawer requires statement and supporting_refs",
+                    None,
+                )
+            })?;
+            let tier = tier.ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "knowledge drawer requires tier, status, statement, and supporting_refs",
+                    None,
+                )
+            })?;
+            let status = status.ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "knowledge drawer requires tier, status, statement, and supporting_refs",
+                    None,
+                )
+            })?;
+
+            if supporting_refs.is_empty() {
+                return Err(ErrorData::invalid_params(
+                    "knowledge drawer requires statement and supporting_refs",
+                    None,
+                ));
+            }
+            validate_drawer_refs("supporting_refs", &supporting_refs)?;
+            validate_drawer_refs("counterexample_refs", &counterexample_refs)?;
+            validate_drawer_refs("teaching_refs", &teaching_refs)?;
+            validate_drawer_refs("verification_refs", &verification_refs)?;
+
+            validate_tier_status(&tier, &status)?;
+
+            Ok(ValidatedIngestMetadata {
+                memory_kind,
+                domain,
+                field,
+                anchor_kind: derived_anchor.anchor_kind,
+                anchor_id: derived_anchor.anchor_id,
+                parent_anchor_id: derived_anchor.parent_anchor_id,
+                provenance: None,
+                statement: Some(statement),
+                tier: Some(tier),
+                status: Some(status),
+                supporting_refs,
+                counterexample_refs,
+                teaching_refs,
+                verification_refs,
+                scope_constraints,
+                trigger_hints,
+            })
+        }
+    }
+}
+
+fn validate_anchor_metadata(
+    request: &IngestRequest,
+    domain: &MemoryDomain,
+    source_type: &SourceType,
+) -> std::result::Result<DerivedAnchor, ErrorData> {
+    let explicit_kind = trim_to_option(request.anchor_kind.as_deref());
+    let explicit_id = trim_to_option(request.anchor_id.as_deref());
+
+    let anchor = match (explicit_kind, explicit_id) {
+        (Some(kind), Some(anchor_id)) => {
+            let anchor_kind = parse_anchor_kind(Some(kind))?.expect("explicit kind");
+            anchor::validate_explicit_anchor(&anchor_kind, anchor_id).map_err(anchor_error)?;
+            DerivedAnchor {
+                anchor_kind,
+                anchor_id: anchor_id.to_string(),
+                parent_anchor_id: trim_to_owned(request.parent_anchor_id.as_deref()),
+            }
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(ErrorData::invalid_params(
+                "anchor_kind and anchor_id must be provided together",
+                None,
+            ));
+        }
+        (None, None) => {
+            if let Some(cwd) = trim_to_option(request.cwd.as_deref()) {
+                anchor::derive_anchor_from_cwd(Some(Path::new(cwd))).map_err(anchor_error)?
+            } else {
+                let defaults = anchor::bootstrap_defaults(source_type);
+                DerivedAnchor {
+                    anchor_kind: defaults.anchor_kind,
+                    anchor_id: defaults.anchor_id,
+                    parent_anchor_id: defaults.parent_anchor_id,
+                }
+            }
+        }
+    };
+
+    anchor::validate_anchor_domain(domain, &anchor.anchor_kind)
+        .map_err(|message| ErrorData::invalid_params(message.to_string(), None))?;
+    Ok(anchor)
+}
+
+fn validate_tier_status(
+    tier: &KnowledgeTier,
+    status: &KnowledgeStatus,
+) -> std::result::Result<(), ErrorData> {
+    let allowed = match tier {
+        KnowledgeTier::DaoTian => &[KnowledgeStatus::Canonical, KnowledgeStatus::Demoted][..],
+        KnowledgeTier::DaoRen => &[
+            KnowledgeStatus::Candidate,
+            KnowledgeStatus::Promoted,
+            KnowledgeStatus::Demoted,
+            KnowledgeStatus::Retired,
+        ][..],
+        KnowledgeTier::Shu => &[
+            KnowledgeStatus::Promoted,
+            KnowledgeStatus::Demoted,
+            KnowledgeStatus::Retired,
+        ][..],
+        KnowledgeTier::Qi => &[
+            KnowledgeStatus::Candidate,
+            KnowledgeStatus::Promoted,
+            KnowledgeStatus::Demoted,
+            KnowledgeStatus::Retired,
+        ][..],
+    };
+
+    if allowed.contains(status) {
+        return Ok(());
+    }
+
+    let message = match tier {
+        KnowledgeTier::DaoTian => "dao_tian only allows canonical or demoted",
+        KnowledgeTier::DaoRen => "dao_ren only allows candidate, promoted, demoted, or retired",
+        KnowledgeTier::Shu => "shu only allows promoted, demoted, or retired",
+        KnowledgeTier::Qi => "qi only allows candidate, promoted, demoted, or retired",
+    };
+    Err(ErrorData::invalid_params(message, None))
+}
+
+fn parse_memory_kind(value: Option<&str>) -> std::result::Result<Option<MemoryKind>, ErrorData> {
+    parse_enum(value, "memory_kind", |normalized| match normalized {
+        "evidence" => Some(MemoryKind::Evidence),
+        "knowledge" => Some(MemoryKind::Knowledge),
+        _ => None,
+    })
+}
+
+fn parse_domain(value: Option<&str>) -> std::result::Result<Option<MemoryDomain>, ErrorData> {
+    parse_enum(value, "domain", |normalized| match normalized {
+        "project" => Some(MemoryDomain::Project),
+        "agent" => Some(MemoryDomain::Agent),
+        "skill" => Some(MemoryDomain::Skill),
+        "global" => Some(MemoryDomain::Global),
+        _ => None,
+    })
+}
+
+fn parse_anchor_kind(value: Option<&str>) -> std::result::Result<Option<AnchorKind>, ErrorData> {
+    parse_enum(value, "anchor_kind", |normalized| match normalized {
+        "global" => Some(AnchorKind::Global),
+        "repo" => Some(AnchorKind::Repo),
+        "worktree" => Some(AnchorKind::Worktree),
+        _ => None,
+    })
+}
+
+fn parse_provenance(value: Option<&str>) -> std::result::Result<Option<Provenance>, ErrorData> {
+    parse_enum(value, "provenance", |normalized| match normalized {
+        "runtime" => Some(Provenance::Runtime),
+        "research" => Some(Provenance::Research),
+        "human" => Some(Provenance::Human),
+        _ => None,
+    })
+}
+
+fn parse_tier(value: Option<&str>) -> std::result::Result<Option<KnowledgeTier>, ErrorData> {
+    parse_enum(value, "tier", |normalized| match normalized {
+        "qi" => Some(KnowledgeTier::Qi),
+        "shu" => Some(KnowledgeTier::Shu),
+        "dao_ren" => Some(KnowledgeTier::DaoRen),
+        "dao_tian" => Some(KnowledgeTier::DaoTian),
+        _ => None,
+    })
+}
+
+fn parse_status(value: Option<&str>) -> std::result::Result<Option<KnowledgeStatus>, ErrorData> {
+    parse_enum(value, "status", |normalized| match normalized {
+        "candidate" => Some(KnowledgeStatus::Candidate),
+        "promoted" => Some(KnowledgeStatus::Promoted),
+        "canonical" => Some(KnowledgeStatus::Canonical),
+        "demoted" => Some(KnowledgeStatus::Demoted),
+        "retired" => Some(KnowledgeStatus::Retired),
+        _ => None,
+    })
+}
+
+fn parse_enum<T, F>(
+    value: Option<&str>,
+    field: &'static str,
+    parser: F,
+) -> std::result::Result<Option<T>, ErrorData>
+where
+    F: Fn(&str) -> Option<T>,
+{
+    let Some(value) = trim_to_option(value) else {
+        return Ok(None);
+    };
+
+    parser(value)
+        .map(Some)
+        .ok_or_else(|| ErrorData::invalid_params(format!("invalid {field}: {value}"), None))
+}
+
+fn normalize_refs(values: Option<&[String]>) -> Vec<String> {
+    values
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|value| trim_to_owned(Some(value.as_str())))
+        .collect()
+}
+
+fn validate_drawer_refs(field: &str, values: &[String]) -> std::result::Result<(), ErrorData> {
+    if values.iter().all(|value| looks_like_drawer_id(value)) {
+        Ok(())
+    } else {
+        Err(ErrorData::invalid_params(
+            format!("{field} must contain drawer ids"),
+            None,
+        ))
+    }
+}
+
+fn looks_like_drawer_id(value: &str) -> bool {
+    value.starts_with("drawer_")
+        && value.len() > "drawer_".len()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn trigger_hints_from_dto(dto: &TriggerHintsDto) -> TriggerHints {
+    TriggerHints {
+        intent_tags: normalize_refs(Some(&dto.intent_tags)),
+        workflow_bias: normalize_refs(Some(&dto.workflow_bias)),
+        tool_needs: normalize_refs(Some(&dto.tool_needs)),
+    }
+}
+
+fn trim_to_option(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn trim_to_owned(value: Option<&str>) -> Option<String> {
+    trim_to_option(value).map(ToOwned::to_owned)
+}
+
+fn anchor_error(error: anchor::AnchorError) -> ErrorData {
+    ErrorData::invalid_params(error.to_string(), None)
 }
 
 #[tool_router(router = tool_router)]
@@ -76,9 +499,13 @@ impl MempalMcpServer {
     async fn mempal_status(&self) -> std::result::Result<Json<StatusResponse>, ErrorData> {
         let db = self.open_db()?;
         let schema_version = db.schema_version().map_err(db_error)?;
+        let stale_drawer_count = db
+            .stale_drawer_count(CURRENT_NORMALIZE_VERSION)
+            .map_err(db_error)? as u64;
         let drawer_count = db.drawer_count().map_err(db_error)?;
         let taxonomy_count = db.taxonomy_count().map_err(db_error)?;
         let db_size_bytes = db.database_size_bytes().map_err(db_error)?;
+        let diary_rollup_days = db.diary_rollup_days().map_err(db_error)?;
         let scopes = db
             .scope_counts()
             .map_err(db_error)?
@@ -92,9 +519,12 @@ impl MempalMcpServer {
 
         Ok(Json(StatusResponse {
             schema_version,
+            normalize_version_current: CURRENT_NORMALIZE_VERSION,
+            stale_drawer_count,
             drawer_count,
             taxonomy_count,
             db_size_bytes,
+            diary_rollup_days,
             scopes,
             aaak_spec: crate::aaak::generate_spec(),
             memory_protocol: crate::core::protocol::MEMORY_PROTOCOL.to_string(),
@@ -109,6 +539,14 @@ impl MempalMcpServer {
         &self,
         Parameters(request): Parameters<SearchRequest>,
     ) -> std::result::Result<Json<SearchResponse>, ErrorData> {
+        let filters = SearchFilters {
+            memory_kind: trim_to_owned(request.memory_kind.as_deref()),
+            domain: trim_to_owned(request.domain.as_deref()),
+            field: trim_to_owned(request.field.as_deref()),
+            tier: trim_to_owned(request.tier.as_deref()),
+            status: trim_to_owned(request.status.as_deref()),
+            anchor_kind: trim_to_owned(request.anchor_kind.as_deref()),
+        };
         let embedder = self.embedder_factory.build().await.map_err(|error| {
             ErrorData::internal_error(format!("failed to build embedder: {error}"), None)
         })?;
@@ -127,11 +565,15 @@ impl MempalMcpServer {
             request.room.as_deref(),
         )
         .map_err(|error| ErrorData::internal_error(format!("routing failed: {error}"), None))?;
-        let results = search_with_vector(
+        let results = search_with_vector_options(
             &db,
             &request.query,
             &query_vector,
             route,
+            SearchOptions {
+                filters,
+                with_neighbors: request.with_neighbors.unwrap_or(false),
+            },
             request.top_k.unwrap_or(10),
         )
         .map_err(|error| ErrorData::internal_error(format!("search failed: {error}"), None))?;
@@ -153,7 +595,73 @@ impl MempalMcpServer {
         Parameters(request): Parameters<IngestRequest>,
     ) -> std::result::Result<Json<IngestResponse>, ErrorData> {
         let room = request.room.as_deref();
-        let drawer_id = build_drawer_id(&request.wing, room, &request.content);
+        if request.diary_rollup.unwrap_or(false) {
+            validate_ingest_request(&request, &SourceType::Manual)?;
+            if request.wing != DIARY_ROLLUP_WING {
+                return Err(ingest_error(IngestError::DiaryRollupWrongWing {
+                    wing: request.wing,
+                }));
+            }
+
+            let room = room
+                .filter(|room| !room.trim().is_empty())
+                .ok_or_else(|| ingest_error(IngestError::DiaryRollupMissingRoom))?;
+            let day = crate::ingest::diary::current_rollup_day_utc();
+            let drawer_id = diary_rollup_drawer_id(room, &day);
+
+            if request.dry_run.unwrap_or(false) {
+                return Ok(Json(IngestResponse {
+                    drawer_id,
+                    duplicate_warning: None,
+                    lock_wait_ms: None,
+                }));
+            }
+
+            let prepared = {
+                let db = self.open_db()?;
+                prepare_diary_rollup(
+                    &db,
+                    &request.content,
+                    DIARY_ROLLUP_WING,
+                    DiaryRollupOptions {
+                        room: Some(room),
+                        day: Some(&day),
+                        dry_run: false,
+                        importance: request.importance.unwrap_or(0),
+                    },
+                )
+                .map_err(ingest_error)?
+            };
+            let embedder = self.embedder_factory.build().await.map_err(|error| {
+                ErrorData::internal_error(format!("failed to build embedder: {error}"), None)
+            })?;
+            let vector = embedder
+                .embed(&[prepared.content.as_str()])
+                .await
+                .map_err(|error| {
+                    ErrorData::internal_error(format!("embedding failed: {error}"), None)
+                })?
+                .into_iter()
+                .next()
+                .ok_or_else(|| ErrorData::internal_error("embedder returned no vector", None))?;
+            let db = self.open_db()?;
+            let outcome =
+                commit_prepared_diary_rollup(&db, prepared, &vector).map_err(ingest_error)?;
+
+            return Ok(Json(IngestResponse {
+                drawer_id: outcome.drawer_id,
+                duplicate_warning: None,
+                lock_wait_ms: outcome.stats.lock_wait_ms,
+            }));
+        }
+
+        let metadata = validate_ingest_request(&request, &SourceType::Manual)?;
+        let drawer_id = build_bootstrap_drawer_id_from_parts(
+            &request.wing,
+            room,
+            &request.content,
+            metadata.identity_parts(),
+        );
 
         if request.dry_run.unwrap_or(false) {
             return Ok(Json(IngestResponse {
@@ -196,8 +704,21 @@ impl MempalMcpServer {
         let duplicate_warning = check_semantic_duplicate(&db, &vector, &request.content);
 
         if !db.drawer_exists(&drawer_id).map_err(db_error)? {
-            let source_file = source_file_or_synthetic(&drawer_id, request.source.as_deref());
-            db.insert_drawer(&Drawer {
+            let source_file = match metadata.memory_kind {
+                MemoryKind::Evidence => {
+                    source_file_or_synthetic(&drawer_id, request.source.as_deref())
+                }
+                MemoryKind::Knowledge => knowledge_source_file(
+                    &metadata.domain,
+                    &metadata.field,
+                    metadata.tier.as_ref().expect("knowledge tier validated"),
+                    metadata
+                        .statement
+                        .as_deref()
+                        .expect("knowledge statement validated"),
+                ),
+            };
+            let drawer = Drawer {
                 id: drawer_id.clone(),
                 content: request.content,
                 wing: request.wing,
@@ -206,9 +727,26 @@ impl MempalMcpServer {
                 source_type: SourceType::Manual,
                 added_at: current_timestamp(),
                 chunk_index: Some(0),
+                normalize_version: CURRENT_NORMALIZE_VERSION,
                 importance: request.importance.unwrap_or(0),
-            })
-            .map_err(db_error)?;
+                memory_kind: metadata.memory_kind,
+                domain: metadata.domain,
+                field: metadata.field,
+                anchor_kind: metadata.anchor_kind,
+                anchor_id: metadata.anchor_id,
+                parent_anchor_id: metadata.parent_anchor_id,
+                provenance: metadata.provenance,
+                statement: metadata.statement,
+                tier: metadata.tier,
+                status: metadata.status,
+                supporting_refs: metadata.supporting_refs,
+                counterexample_refs: metadata.counterexample_refs,
+                teaching_refs: metadata.teaching_refs,
+                verification_refs: metadata.verification_refs,
+                scope_constraints: metadata.scope_constraints,
+                trigger_hints: metadata.trigger_hints,
+            };
+            db.insert_drawer(&drawer).map_err(db_error)?;
             db.insert_vector(&drawer_id, &vector).map_err(db_error)?;
         }
 
@@ -401,17 +939,113 @@ impl MempalMcpServer {
 
     #[tool(
         name = "mempal_tunnels",
-        description = "Discover cross-wing tunnels: rooms that appear in multiple wings, enabling cross-domain knowledge discovery. Returns an empty list if only one wing exists."
+        description = "Discover or manage cross-wing tunnels. Actions: discover/list passive same-room links, add/list/delete/follow explicit semantic links."
     )]
-    async fn mempal_tunnels(&self) -> std::result::Result<Json<TunnelsResponse>, ErrorData> {
+    async fn mempal_tunnels(
+        &self,
+        Parameters(request): Parameters<TunnelsRequest>,
+    ) -> std::result::Result<Json<TunnelsResponse>, ErrorData> {
         let db = self.open_db()?;
-        let tunnels = db
-            .find_tunnels()
-            .map_err(db_error)?
-            .into_iter()
-            .map(|(room, wings)| TunnelDto { room, wings })
-            .collect();
-        Ok(Json(TunnelsResponse { tunnels }))
+        let action = request.action.as_deref().unwrap_or("discover");
+        match action {
+            "discover" => Ok(Json(TunnelsResponse {
+                tunnels: passive_tunnel_dtos(&db, request.wing.as_deref())?,
+            })),
+            "list" => {
+                let kind = request.kind.as_deref().unwrap_or("all");
+                let mut tunnels = Vec::new();
+                if matches!(kind, "all" | "passive") {
+                    tunnels.extend(passive_tunnel_dtos(&db, request.wing.as_deref())?);
+                }
+                if matches!(kind, "all" | "explicit") {
+                    tunnels.extend(
+                        db.list_explicit_tunnels(request.wing.as_deref())
+                            .map_err(db_error)?
+                            .iter()
+                            .map(explicit_tunnel_to_dto),
+                    );
+                }
+                if !matches!(kind, "all" | "passive" | "explicit") {
+                    return Err(ErrorData::invalid_params(
+                        format!("unsupported tunnel kind: {kind}"),
+                        None,
+                    ));
+                }
+                Ok(Json(TunnelsResponse { tunnels }))
+            }
+            "add" => {
+                let left = request
+                    .left
+                    .ok_or_else(|| ErrorData::invalid_params("missing left endpoint", None))?;
+                let right = request
+                    .right
+                    .ok_or_else(|| ErrorData::invalid_params("missing right endpoint", None))?;
+                let label = trim_to_option(request.label.as_deref())
+                    .ok_or_else(|| ErrorData::invalid_params("missing label", None))?;
+                let created_by = self
+                    .client_name
+                    .lock()
+                    .map_err(|_| ErrorData::internal_error("client name lock poisoned", None))?
+                    .clone();
+                let tunnel = db
+                    .create_tunnel(&left.into(), &right.into(), label, created_by.as_deref())
+                    .map_err(db_error)?;
+                Ok(Json(TunnelsResponse {
+                    tunnels: vec![explicit_tunnel_to_dto(&tunnel)],
+                }))
+            }
+            "delete" => {
+                let tunnel_id = trim_to_option(request.tunnel_id.as_deref())
+                    .ok_or_else(|| ErrorData::invalid_params("missing tunnel_id", None))?;
+                if tunnel_id.starts_with("passive_") {
+                    return Err(ErrorData::invalid_params(
+                        "cannot delete passive tunnel",
+                        None,
+                    ));
+                }
+                if !db.delete_explicit_tunnel(tunnel_id).map_err(db_error)? {
+                    return Err(ErrorData::invalid_params(
+                        format!("tunnel not found: {tunnel_id}"),
+                        None,
+                    ));
+                }
+                Ok(Json(TunnelsResponse {
+                    tunnels: Vec::new(),
+                }))
+            }
+            "follow" => {
+                let from = request
+                    .from
+                    .ok_or_else(|| ErrorData::invalid_params("missing from endpoint", None))?;
+                let max_hops = request.max_hops.unwrap_or(1);
+                if !(1..=2).contains(&max_hops) {
+                    return Err(ErrorData::invalid_params("max_hops must be 1 or 2", None));
+                }
+                let tunnels = db
+                    .follow_explicit_tunnels(&from.into(), max_hops)
+                    .map_err(db_error)?
+                    .into_iter()
+                    .map(|result| TunnelDto {
+                        tunnel_id: result.via_tunnel_id.clone(),
+                        kind: "explicit".to_string(),
+                        room: None,
+                        wings: Vec::new(),
+                        left: Some(TunnelEndpointDto::from(&result.endpoint)),
+                        right: None,
+                        label: None,
+                        created_at: None,
+                        created_by: None,
+                        via_tunnel_id: Some(result.via_tunnel_id),
+                        hop: Some(result.hop),
+                    })
+                    .collect();
+                Ok(Json(TunnelsResponse { tunnels }))
+            }
+            other => Err(ErrorData::invalid_params(
+                format!("unsupported tunnels action: {other}"),
+                None,
+            )),
+        }
     }
 
     #[tool(
@@ -629,6 +1263,15 @@ fn db_error(error: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(format!("{error}"), None)
 }
 
+fn ingest_error(error: IngestError) -> ErrorData {
+    match error {
+        IngestError::DiaryRollupWrongWing { .. }
+        | IngestError::DiaryRollupMissingRoom
+        | IngestError::DailyRollupFull { .. } => ErrorData::invalid_params(error.to_string(), None),
+        _ => ErrorData::internal_error(error.to_string(), None),
+    }
+}
+
 fn fact_check_error(error: crate::factcheck::FactCheckError) -> ErrorData {
     match error {
         crate::factcheck::FactCheckError::InvalidScope(_)
@@ -682,6 +1325,63 @@ fn triple_to_dto(triple: &Triple) -> TripleDto {
     }
 }
 
+fn passive_tunnel_dtos(
+    db: &Database,
+    wing: Option<&str>,
+) -> std::result::Result<Vec<TunnelDto>, ErrorData> {
+    let wing = wing.map(str::trim).filter(|value| !value.is_empty());
+    let tunnels = db
+        .find_tunnels()
+        .map_err(db_error)?
+        .into_iter()
+        .filter(|(_, wings)| wing.is_none_or(|filter| wings.iter().any(|item| item == filter)))
+        .map(|(room, wings)| TunnelDto {
+            tunnel_id: passive_tunnel_id(&room),
+            kind: "passive".to_string(),
+            room: Some(room),
+            wings,
+            left: None,
+            right: None,
+            label: None,
+            created_at: None,
+            created_by: None,
+            via_tunnel_id: None,
+            hop: None,
+        })
+        .collect();
+    Ok(tunnels)
+}
+
+fn explicit_tunnel_to_dto(tunnel: &ExplicitTunnel) -> TunnelDto {
+    TunnelDto {
+        tunnel_id: tunnel.id.clone(),
+        kind: "explicit".to_string(),
+        room: None,
+        wings: vec![tunnel.left.wing.clone(), tunnel.right.wing.clone()],
+        left: Some(TunnelEndpointDto::from(&tunnel.left)),
+        right: Some(TunnelEndpointDto::from(&tunnel.right)),
+        label: Some(tunnel.label.clone()),
+        created_at: Some(tunnel.created_at.clone()),
+        created_by: tunnel.created_by.clone(),
+        via_tunnel_id: None,
+        hop: None,
+    }
+}
+
+fn passive_tunnel_id(room: &str) -> String {
+    let sanitized = room
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("passive_{sanitized}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -694,6 +1394,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::core::types::BootstrapEvidenceArgs;
     use crate::embed::Embedder;
 
     #[derive(Clone)]
@@ -796,7 +1497,7 @@ mod tests {
         importance: i32,
     ) {
         let db = Database::open(db_path).expect("open db");
-        db.insert_drawer(&Drawer {
+        db.insert_drawer(&Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
             id: id.to_string(),
             content: content.to_string(),
             wing: wing.to_string(),
@@ -806,7 +1507,7 @@ mod tests {
             added_at: "1713000000".to_string(),
             chunk_index: Some(0),
             importance,
-        })
+        }))
         .expect("insert drawer");
         db.insert_vector(id, &[0.1, 0.2, 0.3])
             .expect("insert vector");
@@ -847,6 +1548,13 @@ mod tests {
                 wing: wing.map(str::to_string),
                 room: room.map(str::to_string),
                 top_k: Some(top_k),
+                memory_kind: None,
+                domain: None,
+                field: None,
+                tier: None,
+                status: None,
+                anchor_kind: None,
+                with_neighbors: None,
             }))
             .await
             .expect("search should succeed")
@@ -1060,6 +1768,24 @@ mod tests {
             source: None,
             importance: None,
             dry_run: None,
+            diary_rollup: None,
+            memory_kind: None,
+            domain: None,
+            field: None,
+            provenance: None,
+            statement: None,
+            tier: None,
+            status: None,
+            supporting_refs: None,
+            counterexample_refs: None,
+            teaching_refs: None,
+            verification_refs: None,
+            scope_constraints: None,
+            trigger_hints: None,
+            anchor_kind: None,
+            anchor_id: None,
+            parent_anchor_id: None,
+            cwd: None,
         };
 
         let server_a = Arc::clone(&server);

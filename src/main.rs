@@ -15,13 +15,20 @@ use mempal::core::{
     config::Config,
     db::Database,
     protocol::{DEFAULT_IDENTITY_HINT, MEMORY_PROTOCOL},
-    types::TaxonomyEntry,
-    utils::{build_triple_id, current_timestamp},
+    types::{
+        AnchorKind, KnowledgeStatus, KnowledgeTier, MemoryDomain, MemoryKind, TaxonomyEntry,
+        TunnelEndpoint,
+    },
+    utils::{build_triple_id, current_timestamp, format_tunnel_endpoint},
 };
 use mempal::embed::{ConfiguredEmbedderFactory, Embedder};
-use mempal::ingest::{IngestOptions, IngestStats, ingest_dir, ingest_dir_with_options};
+use mempal::ingest::{
+    IngestOptions, IngestStats, ingest_dir_with_options, ingest_file_with_options,
+    reindex::{ReindexMode, ReindexOptions, ReindexReport, reindex_sources},
+};
 use mempal::mcp::MempalMcpServer;
-use mempal::search::search;
+use mempal::search::{SearchFilters, SearchOptions, search_with_options};
+use serde::Serialize;
 
 mod longmemeval;
 
@@ -46,9 +53,15 @@ enum Commands {
         #[arg(long)]
         wing: String,
         #[arg(long)]
+        room: Option<String>,
+        #[arg(long)]
         format: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        no_strip_noise: bool,
+        #[arg(long)]
+        diary_rollup: bool,
     },
     Search {
         query: String,
@@ -56,10 +69,24 @@ enum Commands {
         wing: Option<String>,
         #[arg(long)]
         room: Option<String>,
+        #[arg(long)]
+        memory_kind: Option<String>,
+        #[arg(long)]
+        domain: Option<String>,
+        #[arg(long)]
+        field: Option<String>,
+        #[arg(long)]
+        tier: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        anchor_kind: Option<String>,
         #[arg(long, default_value_t = 10)]
         top_k: usize,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        with_neighbors: bool,
     },
     WakeUp {
         #[arg(long)]
@@ -80,12 +107,22 @@ enum Commands {
         #[arg(long)]
         before: Option<String>,
     },
-    Reindex,
+    Reindex {
+        #[arg(long)]
+        stale: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     Kg {
         #[command(subcommand)]
         command: KgCommands,
     },
-    Tunnels,
+    Tunnels {
+        #[command(subcommand)]
+        command: Option<TunnelCommands>,
+    },
     Taxonomy {
         #[command(subcommand)]
         command: TaxonomyCommands,
@@ -188,6 +225,33 @@ enum KgCommands {
 }
 
 #[derive(Subcommand)]
+enum TunnelCommands {
+    Add {
+        #[arg(long)]
+        left: String,
+        #[arg(long)]
+        right: String,
+        #[arg(long)]
+        label: String,
+    },
+    List {
+        #[arg(long)]
+        wing: Option<String>,
+        #[arg(long, default_value = "all")]
+        kind: String,
+    },
+    Delete {
+        tunnel_id: String,
+    },
+    Follow {
+        #[arg(long)]
+        from: String,
+        #[arg(long, default_value_t = 1)]
+        hops: u8,
+    },
+}
+
+#[derive(Subcommand)]
 enum BenchCommands {
     #[command(name = "longmemeval")]
     LongMemEval {
@@ -251,24 +315,60 @@ async fn run() -> Result<()> {
         Commands::Ingest {
             dir,
             wing,
+            room,
             format,
             dry_run,
-        } => ingest_command(&db, &config, &dir, &wing, format, dry_run).await,
+            no_strip_noise,
+            diary_rollup,
+        } => {
+            ingest_command(
+                &db,
+                &config,
+                IngestCommandArgs {
+                    dir: &dir,
+                    wing: &wing,
+                    room: room.as_deref(),
+                    format,
+                    dry_run,
+                    no_strip_noise,
+                    diary_rollup,
+                },
+            )
+            .await
+        }
         Commands::Search {
             query,
             wing,
             room,
+            memory_kind,
+            domain,
+            field,
+            tier,
+            status,
+            anchor_kind,
             top_k,
             json,
+            with_neighbors,
         } => {
             search_command(
                 &db,
                 &config,
-                &query,
-                wing.as_deref(),
-                room.as_deref(),
-                top_k,
-                json,
+                SearchCommandArgs {
+                    query: &query,
+                    wing: wing.as_deref(),
+                    room: room.as_deref(),
+                    filters: SearchFilters {
+                        memory_kind,
+                        domain,
+                        field,
+                        tier,
+                        status,
+                        anchor_kind,
+                    },
+                    top_k,
+                    json,
+                    with_neighbors,
+                },
             )
             .await
         }
@@ -277,9 +377,13 @@ async fn run() -> Result<()> {
         Commands::WakeUp { format } => wake_up_command(&db, format.as_deref()),
         Commands::Compress { text } => compress_command(&text),
         Commands::Bench { command } => bench_command(&config, command).await,
-        Commands::Reindex => reindex_command(&db, &config).await,
+        Commands::Reindex {
+            stale,
+            force,
+            dry_run,
+        } => reindex_command(&db, &config, stale, force, dry_run).await,
         Commands::Kg { command } => kg_command(&db, command),
-        Commands::Tunnels => tunnels_command(&db),
+        Commands::Tunnels { command } => tunnels_command(&db, command),
         Commands::Taxonomy { command } => taxonomy_command(&db, command),
         Commands::Serve { mcp } => serve_command(&config, mcp).await,
         Commands::Status => status_command(&db),
@@ -294,6 +398,16 @@ async fn run() -> Result<()> {
         | Commands::CoworkStatus { .. }
         | Commands::CoworkInstallHooks { .. } => unreachable!(),
     }
+}
+
+struct SearchCommandArgs<'a> {
+    query: &'a str,
+    wing: Option<&'a str>,
+    room: Option<&'a str>,
+    filters: SearchFilters,
+    top_k: usize,
+    json: bool,
+    with_neighbors: bool,
 }
 
 async fn bench_command(config: &Config, command: BenchCommands) -> Result<()> {
@@ -359,47 +473,80 @@ fn init_command(db: &Database, dir: &Path, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-async fn ingest_command(
-    db: &Database,
-    config: &Config,
-    dir: &Path,
-    wing: &str,
-    format: Option<String>,
-    dry_run: bool,
-) -> Result<()> {
-    if let Some(format) = format.as_deref()
+async fn ingest_command(db: &Database, config: &Config, args: IngestCommandArgs<'_>) -> Result<()> {
+    if let Some(format) = args.format.as_deref()
         && format != "convos"
     {
         bail!("unsupported --format value: {format}");
     }
 
-    let stats = if dry_run {
-        ingest_dir_with_options(
-            db,
-            &NoopEmbedder,
-            dir,
-            wing,
-            IngestOptions {
-                room: None,
-                source_root: Some(dir),
-                dry_run: true,
-            },
-        )
-        .await?
-    } else {
-        let embedder = build_embedder(config).await?;
-        ingest_dir(db, &*embedder, dir, wing, None).await?
+    let options = IngestOptions {
+        room: args.room,
+        source_root: if args.dir.is_file() {
+            args.dir.parent()
+        } else {
+            Some(args.dir)
+        },
+        dry_run: args.dry_run,
+        source_file_override: None,
+        replace_existing_source: false,
+        no_strip_noise: args.no_strip_noise,
+        diary_rollup: args.diary_rollup,
+        diary_rollup_day: None,
     };
 
-    append_ingest_audit_log(db, dir, wing, format.as_deref(), dry_run, stats)
-        .context("failed to append ingest audit log")?;
+    let stats = if args.dry_run {
+        ingest_path_with_options(db, &NoopEmbedder, args.dir, args.wing, options).await?
+    } else {
+        let embedder = build_embedder(config).await?;
+        ingest_path_with_options(db, &*embedder, args.dir, args.wing, options).await?
+    };
+
+    append_ingest_audit_log(
+        db,
+        args.dir,
+        args.wing,
+        args.format.as_deref(),
+        args.dry_run,
+        stats,
+    )
+    .context("failed to append ingest audit log")?;
 
     println!(
-        "dry_run={} files={} chunks={} skipped={}",
-        dry_run, stats.files, stats.chunks, stats.skipped
+        "dry_run={} files={} chunks={} skipped={} noise_bytes_stripped={} lock_wait_ms={}",
+        args.dry_run,
+        stats.files,
+        stats.chunks,
+        stats.skipped,
+        stats.noise_bytes_stripped.unwrap_or(0),
+        stats.lock_wait_ms.unwrap_or(0)
     );
 
     Ok(())
+}
+
+struct IngestCommandArgs<'a> {
+    dir: &'a Path,
+    wing: &'a str,
+    room: Option<&'a str>,
+    format: Option<String>,
+    dry_run: bool,
+    no_strip_noise: bool,
+    diary_rollup: bool,
+}
+
+async fn ingest_path_with_options<E: Embedder + ?Sized>(
+    db: &Database,
+    embedder: &E,
+    path: &Path,
+    wing: &str,
+    options: IngestOptions<'_>,
+) -> mempal::ingest::Result<IngestStats> {
+    if path.is_file() {
+        ingest_file_with_options(db, embedder, path, wing, options).await
+    } else {
+        ingest_dir_with_options(db, embedder, path, wing, options).await
+    }
 }
 
 #[derive(Default)]
@@ -457,19 +604,27 @@ fn append_ingest_audit_log(
     Ok(())
 }
 
-async fn search_command(
-    db: &Database,
-    config: &Config,
-    query: &str,
-    wing: Option<&str>,
-    room: Option<&str>,
-    top_k: usize,
-    json: bool,
-) -> Result<()> {
+async fn search_command(db: &Database, config: &Config, args: SearchCommandArgs<'_>) -> Result<()> {
     let embedder = build_embedder(config).await?;
-    let results = search(db, &*embedder, query, wing, room, top_k).await?;
+    let results = search_with_options(
+        db,
+        &*embedder,
+        args.query,
+        args.wing,
+        args.room,
+        SearchOptions {
+            filters: args.filters,
+            with_neighbors: args.with_neighbors,
+        },
+        args.top_k,
+    )
+    .await?;
+    let results = results
+        .into_iter()
+        .map(build_cli_search_result)
+        .collect::<Vec<_>>();
 
-    if json {
+    if args.json {
         println!(
             "{}",
             serde_json::to_string_pretty(&results).context("failed to serialize search results")?
@@ -483,21 +638,157 @@ async fn search_command(
     }
 
     for result in results {
-        let room = result.room.unwrap_or_else(|| "default".to_string());
+        let room = result.room.clone().unwrap_or_else(|| "default".to_string());
         let source_file = result.source_file;
         println!(
             "[{:.3}] {}/{} {}",
             result.similarity, result.wing, room, result.drawer_id
         );
         println!("source: {source_file}");
+        println!(
+            "kind: {} domain: {} field: {} anchor: {} {}",
+            result.memory_kind, result.domain, result.field, result.anchor_kind, result.anchor_id
+        );
+        if let Some(parent_anchor_id) = result.parent_anchor_id.as_deref() {
+            println!("parent_anchor: {parent_anchor_id}");
+        }
+        if let Some(tier) = result.tier.as_deref() {
+            let status = result.status.as_deref().unwrap_or("unknown");
+            println!("knowledge: tier={tier} status={status}");
+        }
+        if let Some(statement) = result.statement.as_deref() {
+            println!("statement: {statement}");
+        }
         if !result.tunnel_hints.is_empty() {
             println!("tunnel: also in {}", result.tunnel_hints.join(", "));
+        }
+        if let Some(neighbors) = result.neighbors.as_ref() {
+            if let Some(prev) = neighbors.prev.as_ref() {
+                println!("prev[{}]: {}", prev.chunk_index, prev.content);
+            }
+            if let Some(next) = neighbors.next.as_ref() {
+                println!("next[{}]: {}", next.chunk_index, next.content);
+            }
         }
         println!("{}", result.content);
         println!();
     }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct CliSearchResult {
+    drawer_id: String,
+    content: String,
+    wing: String,
+    room: Option<String>,
+    source_file: String,
+    similarity: f32,
+    route: mempal::core::types::RouteDecision,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tunnel_hints: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    neighbors: Option<mempal::core::types::ChunkNeighbors>,
+    memory_kind: String,
+    domain: String,
+    field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    statement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    anchor_kind: String,
+    anchor_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_anchor_id: Option<String>,
+}
+
+fn build_cli_search_result(result: mempal::core::types::SearchResult) -> CliSearchResult {
+    CliSearchResult {
+        drawer_id: result.drawer_id,
+        content: result.content,
+        wing: result.wing,
+        room: result.room,
+        source_file: result.source_file,
+        similarity: result.similarity,
+        route: result.route,
+        tunnel_hints: result.tunnel_hints,
+        neighbors: result.neighbors,
+        memory_kind: memory_kind_slug(&result.memory_kind).to_string(),
+        domain: domain_slug(&result.domain).to_string(),
+        field: result.field,
+        statement: result.statement,
+        tier: result
+            .tier
+            .as_ref()
+            .map(knowledge_tier_slug)
+            .map(str::to_string),
+        status: result
+            .status
+            .as_ref()
+            .map(knowledge_status_slug)
+            .map(str::to_string),
+        anchor_kind: anchor_kind_slug(&result.anchor_kind).to_string(),
+        anchor_id: result.anchor_id,
+        parent_anchor_id: result.parent_anchor_id,
+    }
+}
+
+fn memory_kind_slug(value: &MemoryKind) -> &'static str {
+    match value {
+        MemoryKind::Evidence => "evidence",
+        MemoryKind::Knowledge => "knowledge",
+    }
+}
+
+fn domain_slug(value: &MemoryDomain) -> &'static str {
+    match value {
+        MemoryDomain::Project => "project",
+        MemoryDomain::Agent => "agent",
+        MemoryDomain::Skill => "skill",
+        MemoryDomain::Global => "global",
+    }
+}
+
+fn knowledge_tier_slug(value: &KnowledgeTier) -> &'static str {
+    match value {
+        KnowledgeTier::Qi => "qi",
+        KnowledgeTier::Shu => "shu",
+        KnowledgeTier::DaoRen => "dao_ren",
+        KnowledgeTier::DaoTian => "dao_tian",
+    }
+}
+
+fn knowledge_status_slug(value: &KnowledgeStatus) -> &'static str {
+    match value {
+        KnowledgeStatus::Candidate => "candidate",
+        KnowledgeStatus::Promoted => "promoted",
+        KnowledgeStatus::Canonical => "canonical",
+        KnowledgeStatus::Demoted => "demoted",
+        KnowledgeStatus::Retired => "retired",
+    }
+}
+
+fn anchor_kind_slug(value: &AnchorKind) -> &'static str {
+    match value {
+        AnchorKind::Global => "global",
+        AnchorKind::Repo => "repo",
+        AnchorKind::Worktree => "worktree",
+    }
+}
+
+fn effective_wake_up_text(drawer: &mempal::core::types::Drawer) -> &str {
+    match drawer.memory_kind {
+        MemoryKind::Knowledge => drawer
+            .statement
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(drawer.content.as_str()),
+        MemoryKind::Evidence => drawer.content.as_str(),
+    }
 }
 
 fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
@@ -517,7 +808,7 @@ fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
     let top_drawers = db
         .top_drawers(5)
         .context("failed to load recent drawers for wake-up")?;
-    let token_estimate = estimate_tokens(&top_drawers);
+    let token_estimate = estimate_wake_up_tokens(&top_drawers);
 
     // L0: identity + global stats
     println!("## L0 — Identity");
@@ -549,7 +840,10 @@ fn wake_up_command(db: &Database, format: Option<&str>) -> Result<()> {
             if let Some(source_file) = drawer.source_file.as_deref() {
                 println!("  source: {source_file}");
             }
-            println!("  {}", truncate_for_summary(&drawer.content, 120));
+            println!(
+                "  {}",
+                truncate_for_summary(effective_wake_up_text(drawer), 120)
+            );
         }
     }
     println!();
@@ -582,7 +876,7 @@ fn wake_up_aaak_command(db: &Database) -> Result<()> {
     } else {
         top_drawers
             .iter()
-            .map(|drawer| drawer.content.as_str())
+            .map(effective_wake_up_text)
             .collect::<Vec<_>>()
             .join(" ")
     };
@@ -623,49 +917,62 @@ fn compress_command(text: &str) -> Result<()> {
     Ok(())
 }
 
-async fn reindex_command(db: &Database, config: &Config) -> Result<()> {
-    let embedder = build_embedder(config).await?;
-    let new_dim = embedder.dimensions();
-    let current_dim = db.embedding_dim().context("failed to read embedding dim")?;
-
-    println!("embedder: {} ({}d)", embedder.name(), new_dim);
-    if let Some(dim) = current_dim {
-        println!("current vector dim: {dim}");
+async fn reindex_command(
+    db: &Database,
+    config: &Config,
+    stale: bool,
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    if stale && force {
+        bail!("--stale and --force are mutually exclusive");
+    }
+    let mode = if force {
+        ReindexMode::Force
     } else {
-        println!("current vector dim: (empty table)");
-    }
+        ReindexMode::Stale
+    };
+    let options = ReindexOptions { mode, dry_run };
 
-    // Recreate vectors table with new dimension
-    println!("recreating drawer_vectors with {new_dim} dimensions...");
-    db.recreate_vectors_table(new_dim)
-        .context("failed to recreate vectors table")?;
+    let report = if dry_run {
+        reindex_sources(db, &NoopEmbedder, options)
+            .await
+            .context("failed to plan reindex")?
+    } else {
+        let embedder = build_embedder(config).await?;
+        println!("embedder: {} ({}d)", embedder.name(), embedder.dimensions());
+        reindex_sources(db, &*embedder, options)
+            .await
+            .context("failed to reindex sources")?
+    };
 
-    // Re-embed all active drawers
-    let drawers = db
-        .all_active_drawers()
-        .context("failed to load active drawers")?;
-    let total = drawers.len();
-    println!("re-embedding {total} drawers...");
-
-    let batch_size = 64;
-    let mut done = 0;
-    for chunk in drawers.chunks(batch_size) {
-        let texts: Vec<&str> = chunk.iter().map(|(_, content)| content.as_str()).collect();
-        let vectors = embedder.embed(&texts).await.context("embedding failed")?;
-
-        for ((id, _), vector) in chunk.iter().zip(vectors.iter()) {
-            db.insert_vector(id, vector)
-                .with_context(|| format!("failed to insert vector for {id}"))?;
-        }
-
-        done += chunk.len();
-        if total > batch_size {
-            println!("  {done}/{total}");
-        }
-    }
-
-    println!("reindex complete: {total} drawers, {new_dim}d vectors");
+    print_reindex_report(report, dry_run);
     Ok(())
+}
+
+fn print_reindex_report(report: ReindexReport, dry_run: bool) {
+    if dry_run {
+        println!(
+            "would reprocess {} drawers from {} sources",
+            report.candidate_drawers, report.candidate_sources
+        );
+        if report.skipped_missing_drawers > 0 {
+            println!(
+                "would skip {} drawers from {} missing sources",
+                report.skipped_missing_drawers, report.skipped_missing_sources
+            );
+        }
+        return;
+    }
+
+    println!(
+        "reindex complete: processed {} sources, {} drawers selected, {} chunks written, skipped {} existing chunks, skipped {} missing-source drawers",
+        report.processed_sources,
+        report.candidate_drawers,
+        report.reingested_chunks,
+        report.skipped_existing_chunks,
+        report.skipped_missing_drawers
+    );
 }
 
 fn delete_command(db: &Database, drawer_id: &str) -> Result<()> {
@@ -840,7 +1147,68 @@ fn kg_command(db: &Database, command: KgCommands) -> Result<()> {
     Ok(())
 }
 
-fn tunnels_command(db: &Database) -> Result<()> {
+fn tunnels_command(db: &Database, command: Option<TunnelCommands>) -> Result<()> {
+    match command {
+        None => tunnels_discover_command(db),
+        Some(TunnelCommands::Add { left, right, label }) => {
+            let tunnel = db
+                .create_tunnel(
+                    &parse_tunnel_endpoint(&left)?,
+                    &parse_tunnel_endpoint(&right)?,
+                    &label,
+                    Some("mempal-cli"),
+                )
+                .context("failed to add tunnel")?;
+            println!(
+                "created tunnel {}\n{} <-> {} | {}",
+                tunnel.id,
+                format_tunnel_endpoint(&tunnel.left),
+                format_tunnel_endpoint(&tunnel.right),
+                tunnel.label
+            );
+            Ok(())
+        }
+        Some(TunnelCommands::List { wing, kind }) => {
+            tunnels_list_command(db, wing.as_deref(), &kind)
+        }
+        Some(TunnelCommands::Delete { tunnel_id }) => {
+            if tunnel_id.starts_with("passive_") {
+                bail!("cannot delete passive tunnel");
+            }
+            if db
+                .delete_explicit_tunnel(&tunnel_id)
+                .context("failed to delete tunnel")?
+            {
+                println!("deleted tunnel {tunnel_id}");
+                Ok(())
+            } else {
+                bail!("tunnel not found: {tunnel_id}");
+            }
+        }
+        Some(TunnelCommands::Follow { from, hops }) => {
+            let endpoint = parse_tunnel_endpoint(&from)?;
+            let results = db
+                .follow_explicit_tunnels(&endpoint, hops)
+                .context("failed to follow tunnels")?;
+            if results.is_empty() {
+                println!("no explicit tunnel neighbors");
+            } else {
+                for result in &results {
+                    println!(
+                        "hop {} via {} -> {}",
+                        result.hop,
+                        result.via_tunnel_id,
+                        format_tunnel_endpoint(&result.endpoint)
+                    );
+                }
+                println!("\n{} tunnel neighbor(s)", results.len());
+            }
+            Ok(())
+        }
+    }
+}
+
+fn tunnels_discover_command(db: &Database) -> Result<()> {
     let tunnels = db.find_tunnels().context("failed to find tunnels")?;
     if tunnels.is_empty() {
         println!("no tunnels (need rooms shared across multiple wings)");
@@ -851,6 +1219,63 @@ fn tunnels_command(db: &Database) -> Result<()> {
         println!("\n{} tunnel(s)", tunnels.len());
     }
     Ok(())
+}
+
+fn tunnels_list_command(db: &Database, wing: Option<&str>, kind: &str) -> Result<()> {
+    let mut count = 0_usize;
+    if matches!(kind, "all" | "passive") {
+        for (room, wings) in db
+            .find_tunnels()
+            .context("failed to find passive tunnels")?
+        {
+            if wing.is_none_or(|filter| wings.iter().any(|item| item == filter)) {
+                println!(
+                    "passive passive_{room}: room '{room}' ↔ wings: {}",
+                    wings.join(", ")
+                );
+                count += 1;
+            }
+        }
+    }
+    if matches!(kind, "all" | "explicit") {
+        for tunnel in db
+            .list_explicit_tunnels(wing)
+            .context("failed to list explicit tunnels")?
+        {
+            println!(
+                "explicit {}: {} <-> {} | {}",
+                tunnel.id,
+                format_tunnel_endpoint(&tunnel.left),
+                format_tunnel_endpoint(&tunnel.right),
+                tunnel.label
+            );
+            count += 1;
+        }
+    }
+    if !matches!(kind, "all" | "passive" | "explicit") {
+        bail!("unsupported tunnel kind: {kind}");
+    }
+    if count == 0 {
+        println!("no tunnels");
+    } else {
+        println!("\n{count} tunnel(s)");
+    }
+    Ok(())
+}
+
+fn parse_tunnel_endpoint(value: &str) -> Result<TunnelEndpoint> {
+    let trimmed = value.trim();
+    let (wing, room) = match trimmed.split_once(':') {
+        Some((wing, room)) => (wing.trim(), Some(room.trim())),
+        None => (trimmed, None),
+    };
+    if wing.is_empty() {
+        bail!("tunnel endpoint wing is required");
+    }
+    Ok(TunnelEndpoint {
+        wing: wing.to_string(),
+        room: room.filter(|room| !room.is_empty()).map(ToOwned::to_owned),
+    })
 }
 
 fn taxonomy_command(db: &Database, command: TaxonomyCommands) -> Result<()> {
@@ -965,9 +1390,13 @@ fn status_command(db: &Database) -> Result<()> {
     let deleted_count = db
         .deleted_drawer_count()
         .context("failed to count deleted drawers")?;
+    let diary_rollup_days = db
+        .diary_rollup_days()
+        .context("failed to count diary rollup days")?;
 
     println!("schema_version: {schema_version}");
     println!("drawer_count: {drawer_count}");
+    println!("diary_rollup_days: {diary_rollup_days}");
     if deleted_count > 0 {
         println!("deleted_drawers: {deleted_count} (use `mempal purge` to remove)");
     }
@@ -1520,10 +1949,10 @@ fn truncate_for_summary(content: &str, limit: usize) -> String {
     compact.chars().take(limit).collect::<String>() + "..."
 }
 
-fn estimate_tokens(drawers: &[mempal::core::types::Drawer]) -> usize {
+fn estimate_wake_up_tokens(drawers: &[mempal::core::types::Drawer]) -> usize {
     drawers
         .iter()
-        .map(|drawer| drawer.content.split_whitespace().count())
+        .map(|drawer| effective_wake_up_text(drawer).split_whitespace().count())
         .sum()
 }
 
