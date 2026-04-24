@@ -460,7 +460,7 @@ impl Database {
 
         if !exists {
             self.conn.execute_batch(&format!(
-                "CREATE VIRTUAL TABLE drawer_vectors USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[{dim}]);"
+                "CREATE VIRTUAL TABLE IF NOT EXISTS drawer_vectors USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[{dim}]);"
             ))?;
         }
         Ok(())
