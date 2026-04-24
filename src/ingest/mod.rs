@@ -328,7 +328,7 @@ pub async fn ingest_file_with_options<E: Embedder + ?Sized>(
             source,
         })?;
 
-    for ((chunk_index, chunk, drawer_id), vector) in pending.into_iter().zip(vectors.into_iter()) {
+    for ((chunk_index, chunk, drawer_id), vector) in pending.into_iter().zip(vectors) {
         let drawer = Drawer::new_bootstrap_evidence(BootstrapEvidenceArgs {
             id: drawer_id.clone(),
             content: chunk.to_string(),
