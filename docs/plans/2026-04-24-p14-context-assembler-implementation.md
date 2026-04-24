@@ -172,10 +172,11 @@ Use `anchor::derive_anchor_from_cwd(Some(&request.cwd))`. The resulting active a
 ```text
 worktree://...
 repo://...
+repo://legacy
 global://...
 ```
 
-Only include repo if `parent_anchor_id` exists. Global should be represented as `anchor_kind=Global`; use `global://default` or the existing canonical global id if already present.
+Use the derived repo anchor when `parent_anchor_id` exists, and keep `repo://legacy` as a compatibility fallback for drawers backfilled by P12 migrations. Global should be represented as `anchor_kind=Global`; use `global://default` or the existing canonical global id if already present. Global anchor candidates must query `domain=global`, not the request domain.
 
 - [ ] **Step 3: Apply domain/field/tier/status filters**
 
