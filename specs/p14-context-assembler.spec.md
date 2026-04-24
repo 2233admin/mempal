@@ -36,7 +36,8 @@ agent 上下文。本任务不做 MCP/REST parity，也不做 promotion/demotion
 - Anchor 选择和排序固定为：
   - 若请求显式提供 `--cwd`，按该 cwd 推导当前 `worktree` 和 parent `repo`
   - 否则按当前进程 cwd 推导
-  - 同 tier 内优先 `worktree`，再 `repo`，最后 `global`
+  - 同 tier 内优先 `worktree`，再当前 `repo`，再 `repo://legacy` fallback，最后 `global`
+  - `global` anchor 只匹配 `domain='global'` 的通用知识，以保持 P12 的 `global anchor requires domain=global` invariant
 - Knowledge eligibility：
   - 默认只使用 `status in ('canonical', 'promoted')`
   - `candidate`、`demoted`、`retired` 不进入默认 context pack
